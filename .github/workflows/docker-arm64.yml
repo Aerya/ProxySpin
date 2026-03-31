@@ -50,7 +50,7 @@ jobs:
 
       # Étape 1 : build local (pas de push) pour pouvoir lancer le smoke test
       - name: Build (local)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64
@@ -72,7 +72,7 @@ jobs:
 
       # Étape 3 : push uniquement si le smoke test est passé (cache → quasi-instantané)
       - name: Push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64
