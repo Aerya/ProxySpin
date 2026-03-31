@@ -315,7 +315,8 @@ frontend rotating_proxies
   # On le recopie dans Authorization pour que http_auth puisse le lire
   http-request set-header Authorization %[req.hdr(Proxy-Authorization)] if {{ req.hdr(Proxy-Authorization) -m found }}
   acl auth_ok http_auth(proxy_users)
-  http-request deny deny_status 407 hdr Proxy-Authenticate 'Basic realm="ProxySpin"' if !auth_ok
+  # http-request return supporte tous les codes HTTP (deny deny_status est limité à 400/403/405…)
+  http-request return status 407 hdr Proxy-Authenticate 'Basic realm="ProxySpin"' if !auth_ok
 
   # Nettoie les headers auth avant de forwarder au backend
   http-request del-header Proxy-Authorization
