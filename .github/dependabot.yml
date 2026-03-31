@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Versions des GitHub Actions utilisées dans les workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "ci"
+
+  # Image de base du Dockerfile (ubuntu:22.04)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: "docker"

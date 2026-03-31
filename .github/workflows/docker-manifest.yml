@@ -1,0 +1,58 @@
+name: Docker — manifest multi-arch
+
+# À déclencher manuellement une fois les deux builds (amd64 + arm64) terminés.
+# Crée le tag :latest (et :vX.Y pour les releases) pointant vers les deux images.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag à créer (ex: latest, v1.0). Laissez vide pour 'latest'."
+        required: false
+        default: latest
+
+env:
+  IMAGE: ghcr.io/aerya/proxyspin
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute tag
+        id: vars
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          TAG="${TAG:-latest}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Dérive les tags source depuis le tag demandé
+          if [ "$TAG" = "latest" ]; then
+            echo "amd64=${{ env.IMAGE }}:latest-amd64" >> "$GITHUB_OUTPUT"
+            echo "arm64=${{ env.IMAGE }}:latest-arm64" >> "$GITHUB_OUTPUT"
+          else
+            echo "amd64=${{ env.IMAGE }}:${TAG}-amd64" >> "$GITHUB_OUTPUT"
+            echo "arm64=${{ env.IMAGE }}:${TAG}-arm64" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.vars.outputs.tag }} \
+            ${{ steps.vars.outputs.amd64 }} \
+            ${{ steps.vars.outputs.arm64 }}
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.vars.outputs.tag }}

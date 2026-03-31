@@ -1,0 +1,36 @@
+services:
+  proxyspin:
+    build: .
+    ports:
+      - "1973:1973"   # Proxy rotatif (HAProxy)
+      - "1974:1974"   # Web UI + API de contrôle
+      - "1976:1976"   # HAProxy stats
+    environment:
+      # ── Mode : 'tor' ou 'proxy' (proxies gratuits) ──
+      - MODE=tor
+      # ── Rotation ──
+      - AUTO_ROTATION=true
+      - ROTATION_INTERVAL=60     # secondes
+      # ── Tor ──
+      - tors=10                  # nombre d'instances Tor
+      # ── Free proxy ──
+      - MAX_PROXIES=20           # proxies gratuits à conserver
+      # ── Auth proxy port 1973 ──
+      - PROXY_USER=monuser
+      - PROXY_PASS=changeme
+      # ── Auth stats port 1976 ──
+      - STATS_USER=admin
+      - STATS_PASS=changeme
+      # ── Filtre pays optionnel au démarrage (modes 'proxy' et 'local') ──
+      # - COUNTRY_FILTER=FR
+    volumes:
+      # Répertoire de données persistantes :
+      #   data/*.txt        — listes de proxies locaux (mode 'local'), tous les .txt sont fusionnés
+      #   data/sources.json — sources personnalisées (mode 'proxy', auto-généré via le web UI)
+      - ./data:/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "16m"
+        max-file: "5"
