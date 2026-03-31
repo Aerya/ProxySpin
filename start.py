@@ -312,7 +312,7 @@ frontend rotating_proxies
   option http_proxy
 
   acl auth_ok http_auth(proxy_users)
-  http-request auth realm "ProxySpin" if !auth_ok
+  http-request deny deny_status 407 hdr Proxy-Authenticate 'Basic realm="ProxySpin"' if !auth_ok
 
   default_backend tor
 
