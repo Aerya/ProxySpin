@@ -46,7 +46,7 @@ jobs:
           platforms: arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Étape 1 : build local (pas de push) pour pouvoir lancer le smoke test
       - name: Build (local)
