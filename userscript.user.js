@@ -15,13 +15,27 @@
   'use strict';
 
   // ─── Config ───────────────────────────────────────────────────────────────
+  // Migration depuis l'ancien format host+port vers une URL de base unique
+  function _migrateBase() {
+    const saved = GM_getValue('rp_base', '');
+    if (saved) return saved;
+    const oldHost = GM_getValue('rp_host', '192.168.0.150');
+    const oldPort = GM_getValue('rp_port', '1974');
+    return `http://${oldHost}:${oldPort}`;
+  }
+
+  function _normalizeBase(raw) {
+    const s = raw.trim().replace(/\/$/, '');
+    if (/^https?:\/\//i.test(s)) return s;
+    return `http://${s}`;
+  }
+
   let CFG = {
-    host: GM_getValue('rp_host', '192.168.0.150'),
-    port: GM_getValue('rp_port', '1974'),
+    base: _normalizeBase(_migrateBase()),
     user: GM_getValue('rp_user', ''),
     pass: GM_getValue('rp_pass', ''),
   };
-  const apiUrl = path => `http://${CFG.host}:${CFG.port}${path}`;
+  const apiUrl = path => `${CFG.base}${path}`;
 
   // ─── Convertit un code pays ISO en emoji drapeau ──────────────────────────
   function countryFlag(code) {
@@ -110,6 +124,7 @@
     <div id="rp-header">
       <span id="rp-title">⬡ PROXYSPIN</span>
       <div style="display:flex;gap:3px">
+        <button class="rp-ctrl" id="rp-btn-ui"  title="Ouvrir le Web UI">🖥</button>
         <button class="rp-ctrl" id="rp-btn-cfg" title="Paramètres">⚙</button>
         <button class="rp-ctrl" id="rp-btn-col" title="Réduire">−</button>
       </div>
@@ -157,10 +172,8 @@
 
       <!-- Paramètres -->
       <div id="rp-settings">
-        <label>Hôte Docker</label>
-        <input id="rp-host" type="text">
-        <label>Port API</label>
-        <input id="rp-port" type="text">
+        <label>URL du Web UI (ip:port ou https://…)</label>
+        <input id="rp-base" type="text" placeholder="http://192.168.0.150:1974">
         <label>Identifiant</label>
         <input id="rp-user" type="text" autocomplete="username">
         <label>Mot de passe</label>
@@ -197,20 +210,19 @@
   });
 
   // ─── Settings ─────────────────────────────────────────────────────────────
-  el('rp-host').value = CFG.host;
-  el('rp-port').value = CFG.port;
+  el('rp-base').value = CFG.base;
   el('rp-user').value = CFG.user;
   el('rp-pass').value = CFG.pass;
+  el('rp-btn-ui').addEventListener('click', () => window.open(CFG.base, '_blank'));
   el('rp-btn-cfg').addEventListener('click', () => el('rp-settings').classList.toggle('open'));
   el('rp-btn-save').addEventListener('click', () => {
-    CFG.host = el('rp-host').value.trim();
-    CFG.port = el('rp-port').value.trim();
+    CFG.base = _normalizeBase(el('rp-base').value);
     CFG.user = el('rp-user').value.trim();
     CFG.pass = el('rp-pass').value;
-    GM_setValue('rp_host', CFG.host);
-    GM_setValue('rp_port', CFG.port);
+    GM_setValue('rp_base', CFG.base);
     GM_setValue('rp_user', CFG.user);
     GM_setValue('rp_pass', CFG.pass);
+    el('rp-base').value = CFG.base;
     el('rp-settings').classList.remove('open');
     checkStatus();
   });
@@ -286,7 +298,7 @@
       lastMode = s.loading ? lastMode : s.mode;
 
     } catch {
-      setStateBar('offline', '✗', 'Docker injoignable', `${CFG.host}:${CFG.port}`);
+      setStateBar('offline', '✗', 'Docker injoignable', CFG.base);
       el('rp-flag').textContent    = '❌';
       el('rp-ip').textContent      = '—';
       el('rp-country').textContent = '';
