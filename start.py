@@ -1145,11 +1145,11 @@ WEB_UI_HTML = """<!DOCTYPE html>
         lbl_autorot:    'Rotation auto',
         lbl_interval:   'Intervalle',
         lbl_country:    'Filtre pays',
-        all_countries:  '\ud83c\udf0d Tous',
+        all_countries:  '🌍 Tous',
         config_card:    'CONFIGURATION',
         lbl_mode_field: 'Mode',
-        opt_proxy:      '\ud83c\udf10 Proxies gratuits (proxifly)',
-        opt_local:      '\ud83d\udcc2 Proxies locaux (fichier)',
+        opt_proxy:      '🌐 Proxies gratuits (proxifly)',
+        opt_local:      '📂 Proxies locaux (fichier)',
         lbl_autorot_f:  'Rotation automatique',
         lbl_autorot_c:  'Activ\u00e9e',
         lbl_interval_f: 'Intervalle de rotation (secondes)',
@@ -1180,7 +1180,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         adding:         '\u29d7 Ajout\u2026',
         src_added:      '\u2713 Source ajout\u00e9e',
         error:          'Erreur',
-        new_ip:         '\ud83d\udd04 Nouvelle IP',
+        new_ip:         '🔄 Nouvelle IP',
         rotate_ok:      '\u2713 IP chang\u00e9e',
       },
       en: {
@@ -1191,11 +1191,11 @@ WEB_UI_HTML = """<!DOCTYPE html>
         lbl_autorot:    'Auto rotation',
         lbl_interval:   'Interval',
         lbl_country:    'Country filter',
-        all_countries:  '\ud83c\udf0d All',
+        all_countries:  '🌍 All',
         config_card:    'CONFIGURATION',
         lbl_mode_field: 'Mode',
-        opt_proxy:      '\ud83c\udf10 Free proxies (proxifly)',
-        opt_local:      '\ud83d\udcc2 Local proxies (file)',
+        opt_proxy:      '🌐 Free proxies (proxifly)',
+        opt_local:      '📂 Local proxies (file)',
         lbl_autorot_f:  'Automatic rotation',
         lbl_autorot_c:  'Enabled',
         lbl_interval_f: 'Rotation interval (seconds)',
@@ -1226,7 +1226,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         adding:         '\u29d7 Adding\u2026',
         src_added:      '\u2713 Source added',
         error:          'Error',
-        new_ip:         '\ud83d\udd04 New IP',
+        new_ip:         '🔄 New IP',
         rotate_ok:      '\u2713 IP changed',
       }
     };
@@ -1286,7 +1286,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
     }
 
     function countryFlag(code) {
-      if (!code || code.length !== 2) return '\ud83c\udf0d';
+      if (!code || code.length !== 2) return '🌍';
       var c = code.toUpperCase();
       return String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65) +
              String.fromCodePoint(0x1F1E6 + c.charCodeAt(1) - 65);
@@ -1325,13 +1325,13 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
       const modeBadge = $('mode-badge');
       if (s.mode === 'tor') {
-        modeBadge.textContent = '\ud83e\uddc5 Tor';
+        modeBadge.textContent = '🧅 Tor';
         modeBadge.className = 'badge badge-tor';
       } else if (s.mode === 'local') {
-        modeBadge.textContent = '\ud83d\udcc2 Local';
+        modeBadge.textContent = '📂 Local';
         modeBadge.className = 'badge badge-proxy';
       } else {
-        modeBadge.textContent = '\ud83c\udf10 Free Proxy';
+        modeBadge.textContent = '🌐 Free Proxy';
         modeBadge.className = 'badge badge-proxy';
       }
 
