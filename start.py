@@ -11,6 +11,7 @@ import logging
 import os
 import queue
 import random
+import select
 import signal
 import socket
 import subprocess
@@ -23,9 +24,10 @@ from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 # ─── Ports ────────────────────────────────────────────────────────────────────
 
-PROXY_PORT = 1973   # HAProxy — point d'entrée du proxy rotatif
-API_PORT   = 1974   # Web UI + API JSON
-STATS_PORT = 1976   # HAProxy stats
+PROXY_PORT    = 1973   # Python ProxyAuth — point d'entrée exposé
+HAPROXY_PORT  = 11973  # HAProxy interne (localhost uniquement, pas d'auth)
+API_PORT      = 1974   # Web UI + API JSON
+STATS_PORT    = 1976   # HAProxy stats
 
 # ─── Logger ───────────────────────────────────────────────────────────────────
 
@@ -265,7 +267,7 @@ class HAProxy:
     def start(self):
         ensure_dirs('/var/run/haproxy')
         self._write_config()
-        logger.info(f'starting haproxy on port {PROXY_PORT}')
+        logger.info(f'starting haproxy on internal port {HAPROXY_PORT}')
         fire_and_forget(f'haproxy -f {self.CONFIG_PATH} | logger 2>&1')
 
     def soft_reload(self):
@@ -284,8 +286,6 @@ class HAProxy:
                 raise RuntimeError(f"Variable d'environnement manquante : {var}")
 
     def _write_config(self):
-        pu = os.environ['PROXY_USER']
-        pp = os.environ['PROXY_PASS']
         su = os.environ['STATS_USER']
         sp = os.environ['STATS_PASS']
         servers = '\n'.join(
@@ -308,10 +308,6 @@ defaults
   timeout server 60s
 
 
-userlist proxy_users
-  user {pu} insecure-password {pp}
-
-
 listen stats *:{STATS_PORT}
   mode            http
   log             global
@@ -329,20 +325,8 @@ listen stats *:{STATS_PORT}
 
 
 frontend rotating_proxies
-  bind *:{PROXY_PORT}
+  bind 127.0.0.1:{HAPROXY_PORT}
   option http_proxy
-
-  # Les navigateurs envoient les credentials proxy dans Proxy-Authorization (pas Authorization)
-  # On le recopie dans Authorization pour que http_auth puisse le lire
-  http-request set-header Authorization %[req.hdr(Proxy-Authorization)] if {{ req.hdr(Proxy-Authorization) -m found }}
-  acl auth_ok http_auth(proxy_users)
-  # http-request return supporte tous les codes HTTP (deny deny_status est limité à 400/403/405…)
-  http-request return status 407 hdr Proxy-Authenticate 'Basic realm="ProxySpin"' if !auth_ok
-
-  # Nettoie les headers auth avant de forwarder au backend
-  http-request del-header Proxy-Authorization
-  http-request del-header Authorization
-
   default_backend tor
 
 backend tor
@@ -353,6 +337,135 @@ backend tor
 """
         with open(self.CONFIG_PATH, 'w') as f:
             f.write(cfg)
+
+# ─── Proxy HTTP avec auth (port 1973) ────────────────────────────────────────
+# Implémentation inspirée de Gluetun (github.com/qdm12/gluetun)
+# Gère Proxy-Authorization → 407, puis tunnele vers HAProxy interne.
+
+class ProxyAuthServer:
+    """
+    Serveur proxy HTTP sur le port exposé (1973).
+    Vérifie Proxy-Authorization avant de forwarder vers HAProxy interne.
+    Gère HTTP et HTTPS (méthode CONNECT) comme Gluetun.
+    """
+
+    def __init__(self):
+        self._sock = None
+
+    def start(self):
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(('0.0.0.0', PROXY_PORT))
+        self._sock.listen(256)
+        logger.info(f'Proxy HTTP (auth) sur port {PROXY_PORT} → HAProxy interne :{HAPROXY_PORT}')
+        t = threading.Thread(target=self._accept_loop, daemon=True)
+        t.start()
+
+    def _accept_loop(self):
+        while True:
+            try:
+                conn, addr = self._sock.accept()
+                threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+            except Exception:
+                break
+
+    def _handle(self, client):
+        try:
+            # Lire les headers de la première requête
+            raw = b''
+            while b'\r\n\r\n' not in raw:
+                chunk = client.recv(4096)
+                if not chunk:
+                    return
+                raw += chunk
+                if len(raw) > 65536:
+                    return  # protection contre les très gros headers
+
+            sep      = raw.index(b'\r\n\r\n')
+            hdr_raw  = raw[:sep]
+            body_raw = raw[sep + 4:]
+            lines    = hdr_raw.split(b'\r\n')
+
+            # Vérification Proxy-Authorization (comme Gluetun)
+            proxy_auth = ''
+            filtered_lines = [lines[0]]
+            for line in lines[1:]:
+                low = line.lower()
+                if low.startswith(b'proxy-authorization:'):
+                    proxy_auth = line.split(b':', 1)[1].strip().decode('utf-8', errors='replace')
+                elif low.startswith(b'proxy-connection:'):
+                    pass  # supprimer ce header non standard
+                else:
+                    filtered_lines.append(line)
+
+            user = os.environ.get('PROXY_USER', '')
+            pwd  = os.environ.get('PROXY_PASS', '')
+            if user:
+                authorized = False
+                if proxy_auth.startswith('Basic '):
+                    try:
+                        decoded = base64.b64decode(proxy_auth[6:]).decode('utf-8')
+                        u, _, p = decoded.partition(':')
+                        authorized = (u == user and p == pwd)
+                    except Exception:
+                        pass
+                if not authorized:
+                    client.sendall(
+                        b'HTTP/1.1 407 Proxy Authentication Required\r\n'
+                        b'Proxy-Authenticate: Basic realm="ProxySpin"\r\n'
+                        b'Content-Length: 0\r\n'
+                        b'Proxy-Connection: close\r\n'
+                        b'Connection: close\r\n'
+                        b'\r\n'
+                    )
+                    return
+
+            # Connexion au HAProxy interne
+            backend = socket.create_connection(('127.0.0.1', HAPROXY_PORT), timeout=30)
+
+            # Reconstruire la requête sans Proxy-Authorization
+            new_hdr = b'\r\n'.join(filtered_lines)
+            backend.sendall(new_hdr + b'\r\n\r\n' + body_raw)
+
+            # Tunneler le reste de la connexion dans les deux sens
+            self._tunnel(client, backend)
+
+        except Exception:
+            pass
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _tunnel(a, b):
+        """Relaie les données dans les deux sens jusqu'à fermeture d'un côté."""
+        a.setblocking(False)
+        b.setblocking(False)
+        try:
+            while True:
+                r, _, _ = select.select([a, b], [], [], 120)
+                if not r:
+                    break
+                for s in r:
+                    try:
+                        data = s.recv(65536)
+                    except Exception:
+                        return
+                    if not data:
+                        return
+                    other = b if s is a else a
+                    try:
+                        other.sendall(data)
+                    except Exception:
+                        return
+        finally:
+            try:
+                b.close()
+            except Exception:
+                pass
+
 
 # ─── Géolocalisation batch ────────────────────────────────────────────────────
 
@@ -1606,6 +1719,7 @@ if __name__ == '__main__':
 
     manager = ProxyManager()
     manager.start()
+    ProxyAuthServer().start()
     start_api_server(manager)
 
     threading.Thread(target=manager.run_rotation_loop, daemon=True).start()
