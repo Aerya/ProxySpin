@@ -167,9 +167,13 @@ class Privoxy:
 
 class TorProxy:
     def __init__(self, proxy_id):
-        self.id      = proxy_id
-        self.tor     = Tor(self._tor_port, self._control_port)
-        self.privoxy = Privoxy(self.port, '127.0.0.1', self._tor_port, 'socks5t')
+        self.id               = proxy_id
+        self.tor              = Tor(self._tor_port, self._control_port)
+        self.privoxy          = Privoxy(self.port, '127.0.0.1', self._tor_port, 'socks5t')
+        self.exit_ip          = None
+        self.exit_country_code = None
+        self.exit_country_name = None
+        self.latency_ms       = None
 
     @property
     def port(self):            return 20_000 + self.id
@@ -201,6 +205,23 @@ class TorProxy:
                 return r.status == 200
         except Exception:
             return False
+
+    def probe(self):
+        """Mesure la latence et récupère l'IP de sortie de ce circuit Tor."""
+        try:
+            opener = build_opener(ProxyHandler({'http': f'http://127.0.0.1:{self.port}'}))
+            t0 = time.time()
+            with opener.open('http://icanhazip.com', timeout=15) as r:
+                ip = r.read().decode().strip()
+            ms = int((time.time() - t0) * 1000)
+            if ip != self.exit_ip:
+                self.exit_country_code = None
+                self.exit_country_name = None
+            self.exit_ip    = ip
+            self.latency_ms = ms
+        except Exception:
+            self.exit_ip    = None
+            self.latency_ms = None
 
 # ─── FreeProxy (proxy gratuit via Privoxy) ────────────────────────────────────
 
@@ -747,6 +768,8 @@ class ProxyManager:
                 for p in self._proxies:
                     p.tor.rotate()
                 self._last_rotation = time.time()
+                # Resonde les IPs de sortie après le changement de circuit (~15s pour bootstrap)
+                threading.Thread(target=self._probe_tor_backends, args=(15,), daemon=True).start()
                 return {'ok': True, 'mode': 'tor', 'message': f"rotate envoyé ({len(self._proxies)} circuits)"}
             elif self.mode == 'proxy':
                 n = self._rotate_free_proxies()
@@ -796,7 +819,18 @@ class ProxyManager:
     @property
     def backends_info(self):
         if self.mode == 'tor':
-            return [{'type': 'tor', 'addr': f'127.0.0.1:{p.port}', 'id': p.id} for p in self._proxies]
+            return [
+                {
+                    'type':             'tor',
+                    'addr':             f'127.0.0.1:{p.port}',
+                    'id':               p.id,
+                    'exit_ip':          p.exit_ip,
+                    'country_code':     p.exit_country_code,
+                    'country_name':     p.exit_country_name,
+                    'latency_ms':       p.latency_ms,
+                }
+                for p in self._proxies
+            ]
         return [
             {
                 'type':         p.upstream['protocol'],
@@ -881,6 +915,38 @@ class ProxyManager:
             self.haproxy.add_backend(proxy)
             proxy.start()
             self._proxies.append(proxy)
+        # Sonde les circuits en background après le bootstrap (~30s)
+        threading.Thread(target=self._probe_tor_backends, args=(30,), daemon=True).start()
+
+    def _probe_tor_backends(self, delay=0):
+        """Récupère l'IP de sortie et la latence de chaque circuit Tor (background)."""
+        if delay:
+            time.sleep(delay)
+        if self.mode != 'tor' or not self._proxies:
+            return
+        proxies = list(self._proxies)
+        threads = [threading.Thread(target=p.probe, daemon=True) for p in proxies]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+        # Géolocalisation batch des nouvelles IPs
+        to_geo = [p for p in proxies if p.exit_ip and not p.exit_country_code]
+        if not to_geo:
+            return
+        try:
+            body = json.dumps([{'query': p.exit_ip} for p in to_geo]).encode()
+            req  = Request('http://ip-api.com/batch?fields=query,country,countryCode',
+                           data=body, headers={'Content-Type': 'application/json'})
+            with urlopen(req, timeout=10) as r:
+                results = json.loads(r.read())
+            by_ip = {row['query']: row for row in results if row.get('status') != 'fail'}
+            for p in to_geo:
+                info = by_ip.get(p.exit_ip, {})
+                p.exit_country_code = info.get('countryCode')
+                p.exit_country_name = info.get('country')
+        except Exception as e:
+            logger.warning(f'Géolocalisation Tor échouée — {e}')
 
     def _stop_backends(self):
         for p in self._proxies:
@@ -939,7 +1005,7 @@ class ProxyManager:
 # ─── Web UI HTML ──────────────────────────────────────────────────────────────
 
 WEB_UI_HTML = """<!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -981,101 +1047,266 @@ WEB_UI_HTML = """<!DOCTYPE html>
     .type-socks5{color:#ff9800}
     #msg{font-size:12px;color:#4caf50;min-height:16px;margin-top:6px;text-align:center}
     #last-rot{font-size:11px;color:#555}
-    .src-url{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#555;font-size:11px}
+    .src-url{color:#aaa;font-size:11px;word-break:break-all}
     .btn-del{background:#3e1a1a;color:#f44336;border:1px solid #f44336;border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer;font-family:monospace}
     .btn-del:hover{background:#5e2a2a}
+    #lang-bar{position:fixed;top:16px;right:20px;display:flex;gap:6px;z-index:9999}
+    .btn-lang{background:none;border:none;cursor:pointer;font-size:18px;padding:2px;opacity:.4;transition:.15s}
+    .btn-lang:hover,.btn-lang.active{opacity:1}
   </style>
 </head>
 <body>
+  <div id="lang-bar">
+    <button class="btn-lang" id="btn-lang-fr" title="Fran&#xE7;ais">&#x1F1EB;&#x1F1F7;</button>
+    <button class="btn-lang" id="btn-lang-en" title="English">&#x1F1EC;&#x1F1E7;</button>
+  </div>
+
   <h1>&#x2B21; PROXYSPIN</h1>
-  <p class="subtitle">Panel de contr&#xF4;le</p>
+  <p class="subtitle" id="lbl-subtitle"></p>
 
   <div class="grid">
     <div class="card">
-      <h2>STATUT</h2>
-      <div class="row"><span class="label">Mode</span><span id="mode-badge" class="badge">&#x2026;</span></div>
-      <div class="row"><span class="label">Instances</span><span class="value" id="instances">&#x2026;</span></div>
-      <div class="row"><span class="label">Rotation auto</span><span class="badge" id="auto-badge">&#x2026;</span></div>
-      <div class="row"><span class="label">Intervalle</span><span class="value" id="interval-val">&#x2026;</span></div>
+      <h2 id="lbl-status-card"></h2>
+      <div class="row"><span class="label" id="lbl-mode"></span><span id="mode-badge" class="badge">&#x2026;</span></div>
+      <div class="row"><span class="label" id="lbl-instances"></span><span class="value" id="instances">&#x2026;</span></div>
+      <div class="row"><span class="label" id="lbl-autorot"></span><span class="badge" id="auto-badge">&#x2026;</span></div>
+      <div class="row"><span class="label" id="lbl-interval"></span><span class="value" id="interval-val">&#x2026;</span></div>
       <div class="row" id="country-row" style="display:none">
-        <span class="label">Filtre pays</span>
+        <span class="label" id="lbl-country-filter"></span>
         <select id="sel-country" style="width:auto;padding:3px 8px;font-size:12px">
-          <option value="">&#x1F30D; Tous</option>
+          <option value=""></option>
         </select>
       </div>
       <p id="last-rot"></p>
-      <button class="btn-primary" id="btn-rotate">&#x1F504; Nouvelle IP</button>
+      <button class="btn-primary" id="btn-rotate"></button>
       <div id="msg"></div>
     </div>
 
     <div class="card">
-      <h2>CONFIGURATION</h2>
+      <h2 id="lbl-config-card"></h2>
       <div class="field">
-        <label>Mode</label>
+        <label id="lbl-mode-field"></label>
         <select id="sel-mode">
           <option value="tor">&#x1F9C5; Tor</option>
-          <option value="proxy">&#x1F310; Proxies gratuits (proxifly)</option>
-          <option value="local">&#x1F4C2; Proxies locaux (fichier)</option>
+          <option value="proxy" id="opt-proxy"></option>
+          <option value="local" id="opt-local"></option>
         </select>
       </div>
       <div class="field">
-        <label>Rotation automatique</label>
-        <label class="toggle"><input type="checkbox" id="chk-auto"> Activ&#xE9;e</label>
+        <label id="lbl-autorot-field"></label>
+        <label class="toggle"><input type="checkbox" id="chk-auto"> <span id="lbl-autorot-check"></span></label>
       </div>
       <div class="field">
-        <label>Intervalle de rotation (secondes)</label>
+        <label id="lbl-interval-field"></label>
         <input type="number" id="inp-interval" min="10" max="3600" value="60">
       </div>
-      <button class="btn-save" id="btn-save">Enregistrer</button>
+      <button class="btn-save" id="btn-save"></button>
       <div id="msg-cfg"></div>
     </div>
   </div>
 
   <div class="card">
-    <h2>BACKENDS ACTIFS</h2>
-    <table>
-      <thead><tr><th>#</th><th>Type</th><th>Adresse</th><th>Pays</th></tr></thead>
-      <tbody id="backends-body"><tr><td colspan="4" style="color:#555">Chargement&#x2026;</td></tr></tbody>
+    <h2 id="lbl-backends-card"></h2>
+    <table id="backends-table">
+      <thead id="backends-head"></thead>
+      <tbody id="backends-body"></tbody>
     </table>
   </div>
 
   <div class="card" style="margin-top:16px">
-    <h2>SOURCES DE PROXIES <span style="color:#555;font-size:11px;font-weight:normal">(mode proxy)</span></h2>
+    <h2><span id="lbl-sources-card"></span> <span style="color:#555;font-size:11px;font-weight:normal" id="lbl-sources-mode"></span></h2>
     <table>
-      <thead><tr><th style="width:32px">On</th><th>Label</th><th>URL</th><th style="width:32px"></th></tr></thead>
-      <tbody id="sources-body"><tr><td colspan="4" style="color:#555">Chargement&#x2026;</td></tr></tbody>
+      <thead><tr><th style="width:32px" id="th-on"></th><th style="width:140px" id="th-label"></th><th>URL</th><th style="width:32px"></th></tr></thead>
+      <tbody id="sources-body"><tr><td colspan="4" style="color:#555" id="td-src-loading"></td></tr></tbody>
     </table>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:flex-end">
+      <div style="flex:1;min-width:120px">
+        <div class="field" style="margin-bottom:0"><label id="lbl-src-label"></label>
+        <input type="text" id="inp-src-label"></div>
+      </div>
       <div style="flex:3;min-width:200px">
-        <div class="field" style="margin-bottom:0"><label>URL de la source</label>
+        <div class="field" style="margin-bottom:0"><label id="lbl-src-url"></label>
         <input type="text" id="inp-src-url" placeholder="https://&#x2026;"></div>
       </div>
-      <div style="flex:1;min-width:120px">
-        <div class="field" style="margin-bottom:0"><label>Label (optionnel)</label>
-        <input type="text" id="inp-src-label" placeholder="Mon repo"></div>
-      </div>
-      <button class="btn-save" id="btn-add-src" style="white-space:nowrap;height:34px">+ Ajouter</button>
+      <button class="btn-save" id="btn-add-src" style="white-space:nowrap;height:34px"></button>
     </div>
     <div id="msg-sources" style="font-size:12px;color:#4caf50;min-height:16px;margin-top:6px"></div>
   </div>
 
   <script>
+    // ── i18n ──────────────────────────────────────────────────────────────────
+    var LANG = localStorage.getItem('ps_lang') || (navigator.language.startsWith('fr') ? 'fr' : 'en');
+    var TR = {
+      fr: {
+        subtitle:       'Panel de contr\u00f4le',
+        status_card:    'STATUT',
+        lbl_mode:       'Mode',
+        lbl_instances:  'Instances',
+        lbl_autorot:    'Rotation auto',
+        lbl_interval:   'Intervalle',
+        lbl_country:    'Filtre pays',
+        all_countries:  '\ud83c\udf0d Tous',
+        config_card:    'CONFIGURATION',
+        lbl_mode_field: 'Mode',
+        opt_proxy:      '\ud83c\udf10 Proxies gratuits (proxifly)',
+        opt_local:      '\ud83d\udcc2 Proxies locaux (fichier)',
+        lbl_autorot_f:  'Rotation automatique',
+        lbl_autorot_c:  'Activ\u00e9e',
+        lbl_interval_f: 'Intervalle de rotation (secondes)',
+        save:           'Enregistrer',
+        backends_card:  'BACKENDS ACTIFS',
+        th_type:        'Type',
+        th_addr:        'Adresse',
+        th_country:     'Pays',
+        th_exit_ip:     'IP de sortie',
+        th_latency:     'Latence',
+        probing:        'Sondage en cours\u2026',
+        loading:        'Chargement\u2026',
+        no_backend:     'Aucun backend actif',
+        sources_card:   'SOURCES DE PROXIES',
+        sources_mode:   '(mode proxy)',
+        th_on:          'On',
+        th_label:       'Label',
+        src_url_lbl:    'URL de la source',
+        src_lbl_lbl:    'Label (optionnel)',
+        src_lbl_ph:     'Mon repo',
+        add_btn:        '+ Ajouter',
+        no_source:      'Aucune source',
+        last_rot:       'Derni\u00e8re rotation\u00a0: ',
+        in_progress:    '\u29d7 En cours\u2026',
+        cfg_saved:      '\u2713 Configuration sauvegard\u00e9e',
+        applying:       '\u29d7 Application\u2026',
+        mode_switch:    '\u29d7 Changement de mode (peut prendre 1-2 min)\u2026',
+        adding:         '\u29d7 Ajout\u2026',
+        src_added:      '\u2713 Source ajout\u00e9e',
+        error:          'Erreur',
+        new_ip:         '\ud83d\udd04 Nouvelle IP',
+        rotate_ok:      '\u2713 IP chang\u00e9e',
+      },
+      en: {
+        subtitle:       'Control panel',
+        status_card:    'STATUS',
+        lbl_mode:       'Mode',
+        lbl_instances:  'Instances',
+        lbl_autorot:    'Auto rotation',
+        lbl_interval:   'Interval',
+        lbl_country:    'Country filter',
+        all_countries:  '\ud83c\udf0d All',
+        config_card:    'CONFIGURATION',
+        lbl_mode_field: 'Mode',
+        opt_proxy:      '\ud83c\udf10 Free proxies (proxifly)',
+        opt_local:      '\ud83d\udcc2 Local proxies (file)',
+        lbl_autorot_f:  'Automatic rotation',
+        lbl_autorot_c:  'Enabled',
+        lbl_interval_f: 'Rotation interval (seconds)',
+        save:           'Save',
+        backends_card:  'ACTIVE BACKENDS',
+        th_type:        'Type',
+        th_addr:        'Address',
+        th_country:     'Country',
+        th_exit_ip:     'Exit IP',
+        th_latency:     'Latency',
+        probing:        'Probing\u2026',
+        loading:        'Loading\u2026',
+        no_backend:     'No active backend',
+        sources_card:   'PROXY SOURCES',
+        sources_mode:   '(proxy mode)',
+        th_on:          'On',
+        th_label:       'Label',
+        src_url_lbl:    'Source URL',
+        src_lbl_lbl:    'Label (optional)',
+        src_lbl_ph:     'My repo',
+        add_btn:        '+ Add',
+        no_source:      'No source',
+        last_rot:       'Last rotation: ',
+        in_progress:    '\u29d7 In progress\u2026',
+        cfg_saved:      '\u2713 Configuration saved',
+        applying:       '\u29d7 Applying\u2026',
+        mode_switch:    '\u29d7 Switching mode (may take 1-2 min)\u2026',
+        adding:         '\u29d7 Adding\u2026',
+        src_added:      '\u2713 Source added',
+        error:          'Error',
+        new_ip:         '\ud83d\udd04 New IP',
+        rotate_ok:      '\u2713 IP changed',
+      }
+    };
+    function t(k) { return (TR[LANG] && TR[LANG][k]) || TR.fr[k] || k; }
+
+    function applyTranslations() {
+      document.documentElement.lang = LANG;
+      document.getElementById('lbl-subtitle').textContent       = t('subtitle');
+      document.getElementById('lbl-status-card').textContent    = t('status_card');
+      document.getElementById('lbl-mode').textContent           = t('lbl_mode');
+      document.getElementById('lbl-instances').textContent      = t('lbl_instances');
+      document.getElementById('lbl-autorot').textContent        = t('lbl_autorot');
+      document.getElementById('lbl-interval').textContent       = t('lbl_interval');
+      document.getElementById('lbl-country-filter').textContent = t('lbl_country');
+      document.getElementById('lbl-config-card').textContent    = t('config_card');
+      document.getElementById('lbl-mode-field').textContent     = t('lbl_mode_field');
+      document.getElementById('opt-proxy').textContent          = t('opt_proxy');
+      document.getElementById('opt-local').textContent          = t('opt_local');
+      document.getElementById('lbl-autorot-field').textContent  = t('lbl_autorot_f');
+      document.getElementById('lbl-autorot-check').textContent  = t('lbl_autorot_c');
+      document.getElementById('lbl-interval-field').textContent = t('lbl_interval_f');
+      document.getElementById('btn-save').textContent           = t('save');
+      document.getElementById('lbl-backends-card').textContent  = t('backends_card');
+      document.getElementById('lbl-sources-card').textContent   = t('sources_card');
+      document.getElementById('lbl-sources-mode').textContent   = t('sources_mode');
+      document.getElementById('th-on').textContent              = t('th_on');
+      document.getElementById('th-label').textContent           = t('th_label');
+      document.getElementById('lbl-src-url').textContent        = t('src_url_lbl');
+      document.getElementById('lbl-src-label').textContent      = t('src_lbl_lbl');
+      document.getElementById('inp-src-label').placeholder      = t('src_lbl_ph');
+      document.getElementById('btn-add-src').textContent        = t('add_btn');
+      document.getElementById('btn-rotate').textContent         = t('new_ip');
+      // country select first option
+      var sel = document.getElementById('sel-country');
+      if (sel.options.length > 0) sel.options[0].textContent = t('all_countries');
+      // lang buttons
+      document.getElementById('btn-lang-fr').classList.toggle('active', LANG === 'fr');
+      document.getElementById('btn-lang-en').classList.toggle('active', LANG === 'en');
+    }
+
+    function setLang(lang) {
+      LANG = lang;
+      localStorage.setItem('ps_lang', lang);
+      applyTranslations();
+    }
+
+    document.getElementById('btn-lang-fr').addEventListener('click', function() { setLang('fr'); });
+    document.getElementById('btn-lang-en').addEventListener('click', function() { setLang('en'); });
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
     const $ = id => document.getElementById(id);
 
+    function latColor(ms) {
+      if (ms < 1000) return '#4caf50';
+      if (ms < 3000) return '#ff9800';
+      return '#f44336';
+    }
+
     function countryFlag(code) {
-      if (!code || code.length !== 2) return '🌍';
+      if (!code || code.length !== 2) return '\ud83c\udf0d';
       var c = code.toUpperCase();
       return String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65) +
              String.fromCodePoint(0x1F1E6 + c.charCodeAt(1) - 65);
     }
 
+    async function api(method, path, body) {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const r = await fetch(path, opts);
+      return r.json();
+    }
+
+    // ── Pays ──────────────────────────────────────────────────────────────────
     var _countriesCache = [];
     async function loadCountriesWeb(currentFilter) {
       var r = await api('GET', '/api/countries').catch(() => ({ countries: [] }));
       _countriesCache = r.countries || [];
       var sel = $('sel-country');
       var prev = sel.value;
-      sel.innerHTML = '<option value="">🌍 Tous</option>' +
+      sel.innerHTML = '<option value="">' + t('all_countries') + '</option>' +
         _countriesCache.map(function(c) {
           return '<option value="' + c.code + '">' + countryFlag(c.code) + ' ' + c.name + ' (' + c.count + ')</option>';
         }).join('');
@@ -1087,26 +1318,28 @@ WEB_UI_HTML = """<!DOCTYPE html>
       refresh();
     });
 
-    async function api(method, path, body) {
-      const opts = { method, headers: { 'Content-Type': 'application/json' } };
-      if (body) opts.body = JSON.stringify(body);
-      const r = await fetch(path, opts);
-      return r.json();
-    }
-
+    // ── Refresh ───────────────────────────────────────────────────────────────
     async function refresh() {
       const s = await api('GET', '/api/status').catch(() => null);
       if (!s) return;
 
       const modeBadge = $('mode-badge');
-      modeBadge.textContent = s.mode === 'tor' ? '🧅 Tor' : '🌐 Free Proxy';
-      modeBadge.className = 'badge ' + (s.mode === 'tor' ? 'badge-tor' : 'badge-proxy');
+      if (s.mode === 'tor') {
+        modeBadge.textContent = '\ud83e\uddc5 Tor';
+        modeBadge.className = 'badge badge-tor';
+      } else if (s.mode === 'local') {
+        modeBadge.textContent = '\ud83d\udcc2 Local';
+        modeBadge.className = 'badge badge-proxy';
+      } else {
+        modeBadge.textContent = '\ud83c\udf10 Free Proxy';
+        modeBadge.className = 'badge badge-proxy';
+      }
 
-      $('instances').textContent = s.instances;
+      $('instances').textContent  = s.instances;
       $('auto-badge').textContent = s.auto_rotation ? 'ON' : 'OFF';
-      $('auto-badge').className = 'badge ' + (s.auto_rotation ? 'badge-ok' : 'badge-off');
+      $('auto-badge').className   = 'badge ' + (s.auto_rotation ? 'badge-ok' : 'badge-off');
       $('interval-val').textContent = s.rotation_interval + 's';
-      $('last-rot').textContent = 'Dernière rotation : ' + new Date(s.last_rotation).toLocaleTimeString();
+      $('last-rot').textContent   = t('last_rot') + new Date(s.last_rotation).toLocaleTimeString();
 
       $('sel-mode').value     = s.mode;
       $('chk-auto').checked   = s.auto_rotation;
@@ -1114,17 +1347,28 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
       const bk = await api('GET', '/api/backends').catch(() => ({ backends: [] }));
       const tbody = $('backends-body');
+      const thead = $('backends-head');
       if (!bk.backends || bk.backends.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#555">Aucun backend actif</td></tr>';
+        thead.innerHTML = '';
+        tbody.innerHTML = '<tr><td style="color:#555">' + t('no_backend') + '</td></tr>';
+      } else if (s.mode === 'tor') {
+        thead.innerHTML = '<tr><th>#</th><th>' + t('th_exit_ip') + '</th><th>' + t('th_country') + '</th><th>' + t('th_latency') + '</th></tr>';
+        tbody.innerHTML = bk.backends.map(function(b) {
+          var flag    = b.country_code ? countryFlag(b.country_code) : '';
+          var country = flag + ' ' + (b.country_name || b.country_code || '');
+          var ip      = b.exit_ip   || '<span style="color:#555">' + t('probing') + '</span>';
+          var lat     = b.latency_ms != null ? '<span style="color:' + latColor(b.latency_ms) + '">' + b.latency_ms + ' ms</span>' : '<span style="color:#555">\u2014</span>';
+          return '<tr><td>' + b.id + '</td><td style="font-family:monospace">' + ip + '</td><td title="' + (b.country_name || '') + '">' + country + '</td><td>' + lat + '</td></tr>';
+        }).join('');
       } else {
-        tbody.innerHTML = bk.backends.map(b => {
-          var flag = b.country_code ? countryFlag(b.country_code) : '—';
+        thead.innerHTML = '<tr><th>#</th><th>' + t('th_type') + '</th><th>' + t('th_addr') + '</th><th>' + t('th_country') + '</th></tr>';
+        tbody.innerHTML = bk.backends.map(function(b) {
+          var flag = b.country_code ? countryFlag(b.country_code) : '\u2014';
           var cc   = b.country_code || '';
           return '<tr><td>' + b.id + '</td><td class="type-' + b.type + '">' + b.type + '</td><td>' + b.addr + '</td><td title="' + (b.country_name || '') + '">' + flag + ' ' + cc + '</td></tr>';
         }).join('');
       }
 
-      // Filtre pays (proxy/local uniquement)
       if (s.mode !== 'tor') {
         $('country-row').style.display = 'flex';
         loadCountriesWeb(s.country_filter);
@@ -1135,9 +1379,9 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
     $('btn-rotate').addEventListener('click', async () => {
       $('btn-rotate').disabled = true;
-      $('msg').textContent = '⏳ En cours…';
+      $('msg').textContent = t('in_progress');
       const r = await api('POST', '/api/rotate').catch(() => ({ ok: false }));
-      $('msg').textContent = r.ok ? '✓ ' + r.message : '✗ Erreur';
+      $('msg').textContent = r.ok ? t('rotate_ok') : '\u2717 ' + t('error');
       setTimeout(() => { $('msg').textContent = ''; $('btn-rotate').disabled = false; }, 5000);
       refresh();
     });
@@ -1146,22 +1390,23 @@ WEB_UI_HTML = """<!DOCTYPE html>
       const mode     = $('sel-mode').value;
       const auto     = $('chk-auto').checked;
       const interval = parseInt($('inp-interval').value, 10);
-      $('msg-cfg').textContent = '⏳ Application…';
+      $('msg-cfg').textContent = t('applying');
       const s = await api('GET', '/api/status');
       if (s.mode !== mode) {
-        $('msg-cfg').textContent = '⏳ Changement de mode (peut prendre 1-2 min)…';
+        $('msg-cfg').textContent = t('mode_switch');
         await api('POST', '/api/mode', { mode });
       }
       await api('POST', '/api/config', { auto_rotation: auto, rotation_interval: interval });
-      $('msg-cfg').textContent = '✓ Configuration sauvegardée';
+      $('msg-cfg').textContent = t('cfg_saved');
       setTimeout(() => { $('msg-cfg').textContent = ''; }, 4000);
       refresh();
     });
 
+    applyTranslations();
     refresh();
     setInterval(refresh, 8000);
 
-    // ── Sources ──────────────────────────────────────────────────────────────
+    // ── Sources ───────────────────────────────────────────────────────────────
     async function loadSources() {
       const r = await api('GET', '/api/sources').catch(() => ({ sources: [] }));
       renderSources(r.sources || []);
@@ -1170,17 +1415,16 @@ WEB_UI_HTML = """<!DOCTYPE html>
     function renderSources(sources) {
       var tbody = $('sources-body');
       if (!sources.length) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#555">Aucune source</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" style="color:#555">' + t('no_source') + '</td></tr>';
         return;
       }
       tbody.innerHTML = sources.map(function(s) {
         var u = s.url.replace(/"/g, '&quot;').replace(/</g, '&lt;');
         var lbl = (s.label || s.url).replace(/</g, '&lt;');
-        var short = s.url.length > 60 ? s.url.slice(0, 57) + '…' : s.url;
         return '<tr>' +
           '<td><input type="checkbox" class="src-toggle" data-url="' + u + '"' + (s.enabled ? ' checked' : '') + '></td>' +
           '<td>' + lbl + '</td>' +
-          '<td class="src-url" title="' + u + '">' + short + '</td>' +
+          '<td class="src-url">' + u + '</td>' +
           '<td><button class="btn-del" data-url="' + u + '">&#x2715;</button></td>' +
           '</tr>';
       }).join('');
@@ -1200,22 +1444,22 @@ WEB_UI_HTML = """<!DOCTYPE html>
     async function removeSource(url) {
       var r = await api('POST', '/api/sources/remove', { url: url }).catch(() => ({ ok: false }));
       if (r.ok) { loadSources(); }
-      else { $('msg-sources').textContent = '✗ ' + (r.error || 'Erreur'); }
+      else { $('msg-sources').textContent = '\u2717 ' + (r.error || t('error')); }
     }
 
     $('btn-add-src').addEventListener('click', async function() {
       var url   = $('inp-src-url').value.trim();
       var label = $('inp-src-label').value.trim();
       if (!url) return;
-      $('msg-sources').textContent = '⏳ Ajout…';
+      $('msg-sources').textContent = t('adding');
       var r = await api('POST', '/api/sources', { url: url, label: label }).catch(() => ({ ok: false }));
       if (r.ok) {
         $('inp-src-url').value = '';
         $('inp-src-label').value = '';
-        $('msg-sources').textContent = '✓ Source ajoutée';
+        $('msg-sources').textContent = t('src_added');
         loadSources();
       } else {
-        $('msg-sources').textContent = '✗ ' + (r.error || 'Erreur');
+        $('msg-sources').textContent = '\u2717 ' + (r.error || t('error'));
       }
       setTimeout(function() { $('msg-sources').textContent = ''; }, 3000);
     });

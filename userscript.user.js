@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ProxySpin — Contrôleur
 // @namespace    proxyspin-controller
-// @version      3.0.0
+// @version      3.1.0
 // @description  Affiche l'état, le mode (Tor/Proxy), l'IP de sortie et le drapeau du pays en permanence.
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -14,8 +14,94 @@
 (function () {
   'use strict';
 
+  // ─── i18n ─────────────────────────────────────────────────────────────────
+  let LANG = GM_getValue('rp_lang', navigator.language.startsWith('fr') ? 'fr' : 'en');
+
+  const TR = {
+    fr: {
+      checking:       'Vérification\u2026',
+      searching:      'Recherche en cours\u2026',
+      conn_tor:       'Connecté via Tor',
+      conn_local:     'Connecté via proxies locaux',
+      conn_proxy:     'Connecté via Free Proxy',
+      circuits:       'circuit(s)',
+      proxies_active: 'proxy(s) actif(s)',
+      lbl_circuits:   'Circuits actifs',
+      lbl_autorot:    'Rotation auto',
+      lbl_country:    'Pays',
+      all_countries:  '🌍 Tous',
+      new_ip:         '🔄 Nouvelle IP',
+      ip_changing:    "Changement d'IP\u2026",
+      new_circuit:    'Nouveau circuit en cours',
+      circuit_in:     'Nouveau circuit dans',
+      err_api:        '\u2717 Erreur \u2014 API injoignable',
+      offline:        'Docker injoignable',
+      open_ui:        'Ouvrir le Web UI',
+      settings:       'Paramètres',
+      collapse:       'Réduire',
+      expand:         'Étendre',
+      lbl_url:        'URL du Web UI (ip:port ou https://\u2026)',
+      lbl_user:       'Identifiant',
+      lbl_pass:       'Mot de passe',
+      save:           'Enregistrer',
+    },
+    en: {
+      checking:       'Checking\u2026',
+      searching:      'Searching\u2026',
+      conn_tor:       'Connected via Tor',
+      conn_local:     'Connected via local proxies',
+      conn_proxy:     'Connected via Free Proxy',
+      circuits:       'circuit(s)',
+      proxies_active: 'active proxy(s)',
+      lbl_circuits:   'Active circuits',
+      lbl_autorot:    'Auto rotation',
+      lbl_country:    'Country',
+      all_countries:  '🌍 All',
+      new_ip:         '🔄 New IP',
+      ip_changing:    'Changing IP\u2026',
+      new_circuit:    'New circuit in progress',
+      circuit_in:     'New circuit in',
+      err_api:        '\u2717 Error \u2014 API unreachable',
+      offline:        'Docker unreachable',
+      open_ui:        'Open Web UI',
+      settings:       'Settings',
+      collapse:       'Collapse',
+      expand:         'Expand',
+      lbl_url:        'Web UI URL (ip:port or https://\u2026)',
+      lbl_user:       'Username',
+      lbl_pass:       'Password',
+      save:           'Save',
+    }
+  };
+
+  function t(key) { return (TR[LANG] && TR[LANG][key]) || TR.fr[key] || key; }
+
+  function setLang(lang) {
+    LANG = lang;
+    GM_setValue('rp_lang', lang);
+    applyTranslations();
+  }
+
+  function applyTranslations() {
+    el('rp-btn-ui').title          = t('open_ui');
+    el('rp-btn-cfg').title         = t('settings');
+    el('rp-btn-col').title         = panel.classList.contains('rp-collapsed') ? t('expand') : t('collapse');
+    el('rp-lbl-circuits').textContent = t('lbl_circuits');
+    el('rp-lbl-autorot').textContent  = t('lbl_autorot');
+    el('rp-lbl-country').textContent  = t('lbl_country');
+    el('rp-btn-rotate').textContent   = t('new_ip');
+    el('rp-lbl-url').textContent      = t('lbl_url');
+    el('rp-lbl-user').textContent     = t('lbl_user');
+    el('rp-lbl-pass').textContent     = t('lbl_pass');
+    el('rp-btn-save').textContent     = t('save');
+    el('rp-btn-lang-fr').style.opacity = LANG === 'fr' ? '1' : '0.4';
+    el('rp-btn-lang-en').style.opacity = LANG === 'en' ? '1' : '0.4';
+    // Reload first option of country select
+    const sel = el('rp-sel-country');
+    if (sel.options.length > 0) sel.options[0].textContent = t('all_countries');
+  }
+
   // ─── Config ───────────────────────────────────────────────────────────────
-  // Migration depuis l'ancien format host+port vers une URL de base unique
   function _migrateBase() {
     const saved = GM_getValue('rp_base', '');
     if (saved) return saved;
@@ -61,7 +147,6 @@
     #rp-body  { display:flex; flex-direction:column; gap:8px; }
     #rp-panel.rp-collapsed #rp-body { display:none; }
 
-    /* Bande d'état en haut du panel */
     #rp-state-bar {
       display: flex; align-items: center; gap: 8px;
       padding: 7px 10px; border-radius: 8px; font-size: 12px;
@@ -76,7 +161,6 @@
     #rp-state-text { flex: 1; line-height: 1.3; }
     #rp-state-sub  { font-weight:normal; font-size:10px; opacity:.7; display:block; }
 
-    /* IP + drapeau */
     #rp-ip-row {
       display: flex; align-items: center; gap: 8px;
       background: #0d0d1a; border-radius: 7px; padding: 6px 10px;
@@ -86,12 +170,10 @@
     #rp-ip     { font-size: 13px; color: #e0e0e0; font-weight: bold; }
     #rp-country{ font-size: 10px; color: #666; display: block; }
 
-    /* Infos */
     .rp-row    { display:flex; justify-content:space-between; align-items:center; font-size:11px; }
     .rp-label  { color:#555; }
     .rp-val    { color:#aaa; }
 
-    /* Bouton */
     #rp-btn-rotate {
       background:#7c83fd; color:#fff; border:none; border-radius:7px;
       padding:7px 10px; font-size:12px; cursor:pointer; width:100%;
@@ -101,11 +183,11 @@
     #rp-btn-rotate:disabled { opacity:.5; cursor:not-allowed; }
     #rp-cooldown { font-size:10px; color:#555; text-align:center; min-height:14px; }
 
-    /* Contrôles header */
     .rp-ctrl { background:none; border:none; color:#555; cursor:pointer; font-size:13px; padding:0 2px; }
     .rp-ctrl:hover { color:#aaa; }
+    .rp-lang { background:none; border:none; cursor:pointer; font-size:12px; padding:0 1px; line-height:1; }
+    .rp-lang:hover { opacity:1 !important; }
 
-    /* Settings */
     #rp-settings { display:none; flex-direction:column; gap:6px; margin-top:6px; border-top:1px solid #2d2d5e; padding-top:8px; }
     #rp-settings.open { display:flex; }
     #rp-settings label { font-size:11px; color:#666; }
@@ -123,24 +205,24 @@
   panel.innerHTML = `
     <div id="rp-header">
       <span id="rp-title">⬡ PROXYSPIN</span>
-      <div style="display:flex;gap:3px">
-        <button class="rp-ctrl" id="rp-btn-ui"  title="Ouvrir le Web UI">🖥</button>
-        <button class="rp-ctrl" id="rp-btn-cfg" title="Paramètres">⚙</button>
-        <button class="rp-ctrl" id="rp-btn-col" title="Réduire">−</button>
+      <div style="display:flex;gap:3px;align-items:center">
+        <button class="rp-lang" id="rp-btn-lang-fr" title="Français">🇫🇷</button>
+        <button class="rp-lang" id="rp-btn-lang-en" title="English">🇬🇧</button>
+        <button class="rp-ctrl" id="rp-btn-ui">🖥</button>
+        <button class="rp-ctrl" id="rp-btn-cfg">⚙</button>
+        <button class="rp-ctrl" id="rp-btn-col">−</button>
       </div>
     </div>
     <div id="rp-body">
 
-      <!-- Bande d'état principale -->
       <div id="rp-state-bar" class="state-offline">
         <span id="rp-state-icon">○</span>
         <span id="rp-state-text">
-          Vérification…
+          &nbsp;
           <span id="rp-state-sub"></span>
         </span>
       </div>
 
-      <!-- IP + Drapeau -->
       <div id="rp-ip-row">
         <span id="rp-flag">🌐</span>
         <span id="rp-ip-info">
@@ -149,36 +231,33 @@
         </span>
       </div>
 
-      <!-- Infos -->
       <div class="rp-row">
-        <span class="rp-label">Circuits actifs</span>
+        <span class="rp-label" id="rp-lbl-circuits"></span>
         <span class="rp-val" id="rp-instances">—</span>
       </div>
       <div class="rp-row">
-        <span class="rp-label">Rotation auto</span>
+        <span class="rp-label" id="rp-lbl-autorot"></span>
         <span class="rp-val" id="rp-autorot">—</span>
       </div>
 
-      <!-- Filtre pays (proxy/local uniquement) -->
       <div class="rp-row" id="rp-country-row" style="display:none">
-        <span class="rp-label">Pays</span>
+        <span class="rp-label" id="rp-lbl-country"></span>
         <select id="rp-sel-country" style="background:#0d0d1a;border:1px solid #2d2d5e;border-radius:5px;color:#e0e0e0;font-family:monospace;font-size:11px;padding:2px 5px;max-width:120px">
-          <option value="">🌍 Tous</option>
+          <option value=""></option>
         </select>
       </div>
 
-      <button id="rp-btn-rotate" disabled>🔄 Nouvelle IP</button>
+      <button id="rp-btn-rotate" disabled></button>
       <div id="rp-cooldown"></div>
 
-      <!-- Paramètres -->
       <div id="rp-settings">
-        <label>URL du Web UI (ip:port ou https://…)</label>
+        <label id="rp-lbl-url"></label>
         <input id="rp-base" type="text" placeholder="http://192.168.0.150:1974">
-        <label>Identifiant</label>
+        <label id="rp-lbl-user"></label>
         <input id="rp-user" type="text" autocomplete="username">
-        <label>Mot de passe</label>
+        <label id="rp-lbl-pass"></label>
         <input id="rp-pass" type="password" autocomplete="current-password">
-        <button id="rp-btn-save">Enregistrer</button>
+        <button id="rp-btn-save"></button>
       </div>
     </div>
   `;
@@ -189,7 +268,7 @@
   // ─── Drag ─────────────────────────────────────────────────────────────────
   let drag = false, ox = 0, oy = 0;
   panel.addEventListener('mousedown', e => {
-    if (['BUTTON', 'INPUT'].includes(e.target.tagName)) return;
+    if (['BUTTON', 'INPUT', 'SELECT'].includes(e.target.tagName)) return;
     drag = true;
     const r = panel.getBoundingClientRect();
     ox = e.clientX - r.left; oy = e.clientY - r.top;
@@ -207,7 +286,12 @@
   el('rp-btn-col').addEventListener('click', () => {
     panel.classList.toggle('rp-collapsed');
     el('rp-btn-col').textContent = panel.classList.contains('rp-collapsed') ? '+' : '−';
+    el('rp-btn-col').title = panel.classList.contains('rp-collapsed') ? t('expand') : t('collapse');
   });
+
+  // ─── Language switcher ────────────────────────────────────────────────────
+  el('rp-btn-lang-fr').addEventListener('click', () => setLang('fr'));
+  el('rp-btn-lang-en').addEventListener('click', () => setLang('en'));
 
   // ─── Settings ─────────────────────────────────────────────────────────────
   el('rp-base').value = CFG.base;
@@ -270,24 +354,23 @@
         setStateBar(
           'loading',
           '<span class="rp-spin">⟳</span>',
-          'Recherche en cours…',
+          t('searching'),
           s.loading_message || ''
         );
         el('rp-flag').textContent    = '⏳';
         el('rp-ip').textContent      = '—';
         el('rp-country').textContent = '';
       } else if (s.mode === 'tor') {
-        setStateBar('tor', '🧅', 'Connecté via Tor', `${s.instances} circuit(s)`);
+        setStateBar('tor', '🧅', t('conn_tor'), `${s.instances} ${t('circuits')}`);
         if (lastMode !== 'tor') fetchGeo();
       } else if (s.mode === 'local') {
-        setStateBar('proxy', '📂', 'Connecté via proxies locaux', `${s.instances} proxy(s) actif(s)`);
+        setStateBar('proxy', '📂', t('conn_local'), `${s.instances} ${t('proxies_active')}`);
         if (lastMode !== 'local') fetchGeo();
       } else {
-        setStateBar('proxy', '🌐', 'Connecté via Free Proxy', `${s.instances} proxy(s) actif(s)`);
+        setStateBar('proxy', '🌐', t('conn_proxy'), `${s.instances} ${t('proxies_active')}`);
         if (lastMode !== 'proxy') fetchGeo();
       }
 
-      // Sélecteur de pays (masqué en mode Tor)
       if (s.mode !== 'tor' && !s.loading) {
         el('rp-country-row').style.display = 'flex';
         loadCountries(s.country_filter);
@@ -298,17 +381,16 @@
       lastMode = s.loading ? lastMode : s.mode;
 
     } catch {
-      setStateBar('offline', '✗', 'Docker injoignable', CFG.base);
-      el('rp-flag').textContent    = '❌';
-      el('rp-ip').textContent      = '—';
-      el('rp-country').textContent = '';
+      setStateBar('offline', '✗', t('offline'), CFG.base);
+      el('rp-flag').textContent      = '❌';
+      el('rp-ip').textContent        = '—';
+      el('rp-country').textContent   = '';
       el('rp-instances').textContent = '—';
-      el('rp-btn-rotate').disabled = true;
+      el('rp-btn-rotate').disabled   = true;
     }
   }
 
   // ─── Géolocalisation de l'IP de sortie ────────────────────────────────────
-  // ipapi.co/json/ retourne l'IP + pays de la requête → passe par le proxy du navigateur
   async function fetchGeo() {
     el('rp-ip').textContent      = '…';
     el('rp-flag').textContent    = '🌐';
@@ -321,7 +403,6 @@
       el('rp-flag').textContent    = countryFlag(d.country_code);
       el('rp-country').textContent = d.country_name || d.country_code || '';
     } catch {
-      // Fallback : juste l'IP brute
       try {
         const r2 = await gmReq('GET', 'https://icanhazip.com/');
         el('rp-ip').textContent = r2.responseText.trim() || '?';
@@ -336,13 +417,12 @@
 
   async function loadCountries(currentFilter) {
     const sel = el('rp-sel-country');
-    // Ne recharge la liste que si le pool a changé (sinon juste sync la valeur)
     if (!_countriesLoaded) {
       try {
         const r = await gmReq('GET', apiUrl('/api/countries'));
         if (r.status !== 200) throw new Error();
         const data = JSON.parse(r.responseText);
-        sel.innerHTML = '<option value="">🌍 Tous</option>' +
+        sel.innerHTML = `<option value="">${t('all_countries')}</option>` +
           (data.countries || []).map(function(c) {
             return '<option value="' + c.code + '">' + countryFlag(c.code) + ' ' + c.name + ' (' + c.count + ')</option>';
           }).join('');
@@ -353,9 +433,9 @@
   }
 
   el('rp-sel-country').addEventListener('change', async function() {
-    _countriesLoaded = false;  // force reload au prochain checkStatus (pool peut changer)
+    _countriesLoaded = false;
     await gmReq('POST', apiUrl('/api/country'), { country: this.value });
-    fetchGeo();  // l'IP va changer
+    fetchGeo();
   });
 
   // ─── Nouvelle IP ──────────────────────────────────────────────────────────
@@ -370,8 +450,8 @@
     setStateBar(
       'loading',
       '<span class="rp-spin">⟳</span>',
-      'Changement d\'IP…',
-      'Nouveau circuit en cours'
+      t('ip_changing'),
+      t('new_circuit')
     );
     el('rp-flag').textContent    = '⏳';
     el('rp-ip').textContent      = '—';
@@ -381,14 +461,14 @@
       const r = await gmReq('POST', apiUrl('/api/rotate'));
       if (r.status !== 200) throw new Error();
     } catch {
-      el('rp-cooldown').textContent = '✗ Erreur — API injoignable';
+      el('rp-cooldown').textContent = t('err_api');
       el('rp-btn-rotate').disabled = false;
       checkStatus();
       return;
     }
 
     let remaining = COOLDOWN;
-    el('rp-cooldown').textContent = `Nouveau circuit dans ${remaining}s`;
+    el('rp-cooldown').textContent = `${t('circuit_in')} ${remaining}s`;
     cdTimer = setInterval(() => {
       remaining--;
       if (remaining <= 0) {
@@ -397,18 +477,18 @@
         el('rp-btn-rotate').disabled = false;
         fetchGeo();
       } else {
-        el('rp-cooldown').textContent = `Nouveau circuit dans ${remaining}s`;
+        el('rp-cooldown').textContent = `${t('circuit_in')} ${remaining}s`;
       }
     }, 1000);
 
-    // L'IP met quelques secondes à changer
     setTimeout(() => { checkStatus(); fetchGeo(); }, 5000);
   });
 
   // ─── Init ─────────────────────────────────────────────────────────────────
+  applyTranslations();
   checkStatus();
   fetchGeo();
-  setInterval(checkStatus, 20000); // statut toutes les 20s
-  setInterval(fetchGeo,    90000); // IP toutes les 90s
+  setInterval(checkStatus, 20000);
+  setInterval(fetchGeo,    90000);
 
 })();
