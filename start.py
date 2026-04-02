@@ -169,16 +169,18 @@ class Privoxy:
         return f'forward /  {h}:{p}  .'
 
     def _write_config(self):
+        lines = [
+            'confdir /etc/privoxy',
+            f'listen-address  127.0.0.1:{self.port}',
+            self._forward_directive(),
+            'logdir /var/log/privoxy',
+            'debug 0',
+            'keep-alive-timeout 5',
+            'default-server-timeout 60',
+            'socket-timeout 60',
+        ]
         with open(self._config_path, 'w') as f:
-            f.write(
-                f'listen-address  127.0.0.1:{self.port}\n'
-                f'{self._forward_directive()}\n'
-                f'logdir /var/log/privoxy\n'
-                f'debug 0\n'
-                f'keep-alive-timeout 5\n'
-                f'default-server-timeout 60\n'
-                f'socket-timeout 60\n'
-            )
+            f.write('\n'.join(lines) + '\n')
 
 # ─── TorProxy (Tor + Privoxy) ─────────────────────────────────────────────────
 
