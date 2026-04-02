@@ -4,7 +4,7 @@ services:
     container_name: proxyspin
     restart: always
     ports:
-      - 1973:1973 # Proxy rotatif (HAProxy)
+      - 1973:1973 # Proxy rotatif
       - 1974:1974 # Web UI + API de contrôle
       - 1976:1976 # HAProxy stats
     environment:
@@ -23,12 +23,16 @@ services:
       # ── Auth stats port 1976 ──
       - STATS_USER=admin
       - STATS_PASS=changeme
-      # ── Filtre pays optionnel au démarrage (modes 'proxy' et 'local') ──
+      # ── Désactivation auth (mettre 'false' pour désactiver) ──
+      # - PROXY_AUTH_ENABLED=false  # port 1973 — proxy rotatif
+      # - API_AUTH_ENABLED=false    # port 1974 — Web UI + API
+      # - STATS_AUTH_ENABLED=false  # port 1976 — HAProxy stats
+      # ── Filtre pays optionnel (modes 'proxy' et 'local') ──
       # - COUNTRY_FILTER=FR
     volumes:
       # Répertoire de données persistantes :
-      #   data/*.txt        — listes de proxies locaux (mode 'local'), tous les .txt sont fusionnés
-      #   data/sources.json — sources personnalisées (mode 'proxy', auto-généré via le web UI)
+      #   data/*.txt        — listes de proxies locaux (mode 'local')
+      #   data/sources.json — sources personnalisées (mode 'proxy')
       - ./data:/data
     logging:
       driver: json-file
