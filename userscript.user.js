@@ -489,6 +489,6 @@
   checkStatus();
   fetchGeo();
   setInterval(checkStatus, 20000);
-  setInterval(fetchGeo,    90000);
+  setInterval(fetchGeo,    20000);
 
 })();
