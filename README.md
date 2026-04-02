@@ -20,7 +20,10 @@ ProxySpin expose **un point d'entrée unique** (port 1973) derrière lequel chaq
 Navigateur / Client
         │
         ▼
-   HAProxy :1973          ← point d'entrée unique (auth Basic)
+  Python Proxy :1973      ← point d'entrée exposé (Basic auth, HTTP + HTTPS CONNECT)
+        │
+        ▼
+   HAProxy :11973          ← interne uniquement (localhost), load balancer TCP
         │  balance leastconn
         ├── Privoxy :20000
         ├── Privoxy :20001   ← chaque instance forward vers Tor ou un proxy gratuit
@@ -35,6 +38,8 @@ Navigateur / Client
         │
    Réseau Tor → Internet (IP de sortie différente par circuit)
 ```
+
+Le port **1973 est géré par un serveur Python** (calqué sur le mécanisme de Gluetun) qui vérifie l'authentification avant de transférer vers HAProxy interne sur le port 11973. HAProxy opère en **mode TCP** (compatible HAProxy 2.5+) et relaie les bytes bruts vers les instances Privoxy qui effectuent le vrai travail de proxy.
 
 ## Ports
 
@@ -61,8 +66,6 @@ Lancer :
 docker compose up -d
 ```
 
-Ou utiliser l'image pré-buildée (voir section [Images Docker](#images-docker-pré-buildées)).
-
 ## Configuration
 
 Toutes les options sont des variables d'environnement dans `docker-compose.yml` :
@@ -75,185 +78,131 @@ Toutes les options sont des variables d'environnement dans `docker-compose.yml` 
 | `tors` | `10` | Nombre d'instances Tor parallèles (mode `tor`) |
 | `MAX_PROXIES` | `20` | Nombre de proxies actifs dans HAProxy (modes `proxy` et `local`) |
 | `COUNTRY_FILTER` | — | Filtre pays au démarrage, code ISO 2 lettres (ex. `FR`, `DE`) |
-| `PROXY_USER` | — | Identifiant proxy port 1973 **(obligatoire)** |
-| `PROXY_PASS` | — | Mot de passe proxy **(obligatoire)** |
-| `STATS_USER` | — | Identifiant web UI + API ports 1974 et 1976 **(obligatoire)** |
-| `STATS_PASS` | — | Mot de passe web UI + API **(obligatoire)** |
+| `PROXY_USER` | — | Identifiant proxy port 1973 |
+| `PROXY_PASS` | — | Mot de passe proxy |
+| `STATS_USER` | — | Identifiant web UI + API ports 1974 et 1976 |
+| `STATS_PASS` | — | Mot de passe web UI + API |
+| `PROXY_AUTH_ENABLED` | `true` | Auth sur le port 1973 (`false` pour désactiver) |
+| `API_AUTH_ENABLED` | `true` | Auth sur le port 1974 (`false` pour désactiver) |
+| `STATS_AUTH_ENABLED` | `true` | Auth sur le port 1976 (`false` pour désactiver) |
+
+### Désactiver l'authentification
+
+Par défaut, les trois ports sont protégés. Pour désactiver l'auth sur un port (utile sur réseau local de confiance), décommenter la ligne correspondante dans `docker-compose.yml` :
+
+```yaml
+# - PROXY_AUTH_ENABLED=false   # port 1973 — proxy rotatif
+# - API_AUTH_ENABLED=false     # port 1974 — Web UI + API
+# - STATS_AUTH_ENABLED=false   # port 1976 — HAProxy stats
+```
+
+Quand une auth est désactivée, les variables `PROXY_USER`/`PROXY_PASS` ou `STATS_USER`/`STATS_PASS` correspondantes deviennent optionnelles.
 
 ### Détail des variables
 
 **`MODE` / `AUTO_ROTATION` / `ROTATION_INTERVAL`**
-Ces trois variables définissent l'état **au démarrage du conteneur**. Une fois lancé, tout peut être modifié à chaud depuis le web UI (port 1974) ou le userscript — sans redémarrer. En revanche, ces changements en live sont perdus si le conteneur redémarre. Si vous voulez un comportement persistant, fixez-le dans `docker-compose.yml`.
+Ces trois variables définissent l'état **au démarrage du conteneur**. Une fois lancé, tout peut être modifié à chaud depuis le web UI (port 1974) ou le userscript — sans redémarrer. Ces changements en live sont perdus si le conteneur redémarre ; pour un comportement persistant, fixez-le dans `docker-compose.yml`.
 
 **`tors`**
-En mode `tor`, ProxySpin démarre N processus Tor complètement indépendants. Chacun construit son propre circuit chiffré à 3 nœuds et possède sa propre IP de sortie. HAProxy répartit les requêtes entre ces N instances. Avec `tors=10`, vous avez 10 IPs de sortie différentes disponibles simultanément. Augmenter cette valeur donne plus de diversité, mais consomme plus de RAM et rallonge le démarrage.
+En mode `tor`, ProxySpin démarre N processus Tor complètement indépendants. Chacun construit son propre circuit chiffré à 3 nœuds et possède sa propre IP de sortie. HAProxy répartit les requêtes entre ces N instances. Avec `tors=10`, vous avez 10 IPs de sortie différentes disponibles simultanément.
 
 **`MAX_PROXIES`**
-En modes `proxy` et `local`, ProxySpin teste potentiellement des milliers de proxies (selon vos sources et fichiers). Seuls les `MAX_PROXIES` premiers proxies opérationnels sont activés dans HAProxy — chacun nécessitant un processus Privoxy. Les autres candidats testés sont ignorés. Si un filtre pays est actif, ProxySpin élargit la recherche à `MAX_PROXIES × 5` candidats pour avoir suffisamment de proxies du pays voulu dans le lot.
-
-> ⚠️ Si tous les proxies actifs sont bloqués par le site visité, il faut attendre la prochaine rotation (automatique ou manuelle via le userscript/web UI) pour obtenir un nouveau pool.
+En modes `proxy` et `local`, seuls les `MAX_PROXIES` premiers proxies opérationnels sont activés dans HAProxy. Si un filtre pays est actif, ProxySpin élargit la recherche à `MAX_PROXIES × 5` candidats.
 
 **`COUNTRY_FILTER`**
-Entièrement optionnel. Utile si vous souhaitez que le filtre soit actif dès le démarrage, sans avoir à le sélectionner à chaque fois dans le userscript. Peut être modifié à tout moment depuis le web UI ou le userscript (sans redémarrer).
-
-**`PROXY_USER` / `PROXY_PASS`**
-Identifiants pour accéder au proxy sur le port 1973. Sans ces variables, le proxy est accessible sans mot de passe — à n'utiliser que sur un réseau totalement isolé.
-
-**`STATS_USER` / `STATS_PASS`**
-Identifiants communs pour le web UI + API (port 1974) et la page de stats HAProxy (port 1976). Sans ces variables, ces interfaces sont accessibles sans mot de passe.
+Entièrement optionnel. Peut être modifié à tout moment depuis le web UI ou le userscript, sans redémarrer.
 
 ## Sécurité
 
-Les trois ports exposés sont protégés par **HTTP Basic auth** :
+Les trois ports exposés peuvent être protégés par **HTTP Basic auth** :
 
-- **Port 1973** (proxy) — via HAProxy, identifiants `PROXY_USER` / `PROXY_PASS`
-- **Port 1974** (web UI + API) — via Python, identifiants `STATS_USER` / `STATS_PASS`
-- **Port 1976** (stats HAProxy) — via HAProxy, identifiants `STATS_USER` / `STATS_PASS`
+- **Port 1973** (proxy) — serveur Python, identifiants `PROXY_USER` / `PROXY_PASS`
+- **Port 1974** (web UI + API) — serveur Python, identifiants `STATS_USER` / `STATS_PASS`
+- **Port 1976** (stats HAProxy) — HAProxy, identifiants `STATS_USER` / `STATS_PASS`
 
-Le port 1974 protège l'ensemble du panneau de contrôle et de l'API JSON. Le navigateur affiche automatiquement une boîte de connexion à la première ouverture. Le userscript Tampermonkey stocke les identifiants localement (champ ⚙ du panneau flottant).
-
-## Sources de proxies (mode proxy)
-
-En mode `proxy`, ProxySpin interroge une liste de sources configurable depuis l'interface web (port 1974, carte **SOURCES DE PROXIES**).
-
-### Sources par défaut
-
-Les quatre listes [proxifly](https://github.com/proxifly/free-proxy-list) sont pré-chargées (http, https, socks4, socks5). ProxySpin les récupère directement sur `raw.githubusercontent.com` à chaque rotation — proxifly mettant ses listes à jour quotidiennement, les IPs sont toujours fraîches.
-
-### Gestion des sources
-
-1. **Les 4 sources proxifly sont actives par défaut** — pas de configuration nécessaire pour démarrer.
-2. **Plusieurs sources** — ajoutez-en autant que vous voulez. Elles sont fusionnées et testées ensemble avant d'alimenter le pool.
-3. **URLs directes** — toute API publique renvoyant une liste de proxies est acceptée (ex. proxyscrape).
-4. **Autres dépôts GitHub** — utilisez le lien **Raw** du fichier, pas l'URL de la page :
-   - ❌ `https://github.com/user/repo/blob/main/list.json`
-   - ✅ `https://raw.githubusercontent.com/user/repo/main/list.json`
-
-   Le bouton **Raw** en haut de chaque fichier sur GitHub donne le bon lien.
-5. **Cases à cocher** — chaque source peut être désactivée sans être supprimée, et réactivée plus tard.
-
-La configuration est persistée dans `data/sources.json` (volume Docker).
-
-### Exemples d'URLs compatibles
-
-```
-# Format JSON (proxifly-style) — filtre automatiquement elite/anonymous
-https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.json
-
-# Format texte brut, une ligne par proxy (ip:port)
-https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all
-
-# N'importe quel autre repo ou API dans l'un de ces deux formats
-```
-
-ProxySpin détecte automatiquement le format de chaque source :
-- **JSON** (liste d'objets avec `ip`, `port`, `anonymity`…) — filtre `elite` / `anonymous`
-- **Texte brut** (une entrée par ligne) — formats acceptés : `ip:port`, `http://ip:port`, `socks5://ip:port`…
-
-## Filtre par pays (modes proxy et local)
-
-En modes `proxy` et `local`, il est possible de restreindre le pool à un pays spécifique.
-
-### Comment ça marche
-
-1. **Proxifly JSON** : le pays est directement inclus dans les données (`geolocation.countryCode`) — aucune requête supplémentaire.
-2. **Sources texte brut** : les IPs n'ont pas de métadonnée de pays. ProxySpin les géolocalise automatiquement après le test de fonctionnement via [ip-api.com](http://ip-api.com) (gratuit, 100 IPs par requête).
-3. Le pool complet testé et géolocalisé est **conservé en mémoire**. Changer de pays filtre ce pool instantanément, **sans re-fetch réseau**.
-4. Si le pays demandé n'a aucun proxy dans le pool actuel, un avertissement est émis et tous les proxies sont utilisés.
-5. Quand un filtre pays est actif, ProxySpin récupère jusqu'à `MAX_PROXIES × 5` candidats lors du fetch pour avoir suffisamment de proxies du pays voulu.
-
-### Utilisation
-
-**Depuis le userscript** (panneau flottant) : un menu déroulant apparaît en modes proxy/local, listant les pays disponibles dans le pool actuel avec leur drapeau et le nombre de proxies. La sélection est instantanée.
-
-**Depuis l'interface web** (port 1974) : menu déroulant dans la carte Statut.
-
-**Au démarrage** via variable d'environnement :
-```yaml
-- COUNTRY_FILTER=FR
-```
-
-> ℹ️ Le filtre pays n'est pas disponible en mode **Tor** : les circuits Tor choisissent leur nœud de sortie automatiquement.
-
-## Mode proxies locaux
-
-Permet d'utiliser votre propre liste de proxies au lieu de Tor ou de proxifly.
-
-**1. Déposer un ou plusieurs fichiers `.txt` dans le dossier `data/`** :
-
-ProxySpin scanne automatiquement **tous les fichiers `.txt`** du volume `/data` et les fusionne. Vous pouvez donc avoir `data/liste1.txt`, `data/liste2.txt`, etc. Les doublons (même IP+port+protocole) sont ignorés.
-
-Format d'un fichier `.txt` :
-
-```
-# Un proxy par ligne — lignes vides et # ignorés
-#
-# Formats acceptés :
-#   ip:port                  → HTTP par défaut
-#   http://ip:port
-#   https://ip:port
-#   socks4://ip:port
-#   socks5://ip:port
-
-1.2.3.4:8080
-http://5.6.7.8:3128
-socks5://9.10.11.12:1080
-socks4://13.14.15.16:1080
-```
-
-> ℹ️ Si vous ajoutez de nouveaux fichiers `.txt` dans le dossier `data/`, **redémarrez le conteneur** pour qu'ils soient pris en compte. La rotation automatique relit uniquement les fichiers déjà présents au démarrage.
-
-**2. Sélectionner le mode `local`** dans `docker-compose.yml` :
-
-```yaml
-- MODE=local
-```
-
-ou basculer à chaud depuis l'interface web (port 1974).
-
-Au démarrage, chaque proxy est testé en parallèle (15 threads), puis géolocalisé. Seuls les proxies qui répondent sont ajoutés au pool. La rotation automatique relit les fichiers à chaque cycle — le contenu des fichiers peut être modifié sans redémarrer le conteneur.
+> ⚠️ **Réseau local** : si le navigateur est configuré pour utiliser le proxy 1973, tout le trafic transite par Privoxy→Tor, y compris les requêtes vers votre réseau local (192.168.x.x). Ajoutez vos adresses locales dans les exceptions proxy du navigateur pour accéder directement aux ports 1974 et 1976.
+>
+> Dans LibreWolf / Firefox : `Paramètres → Général → Paramètres réseau → Pas de proxy pour :`
+> ```
+> localhost, 127.0.0.1, 192.168.0.0/24
+> ```
 
 ## Utilisation
 
-**Configurer le navigateur** pour utiliser `http://VOTRE_IP:1973` comme proxy HTTP (identifiants `PROXY_USER` / `PROXY_PASS`).
+**Configurer le navigateur** pour utiliser `http://VOTRE_IP:1973` comme proxy HTTP (identifiants `PROXY_USER` / `PROXY_PASS` si auth activée).
 
-**Interface web** : `http://VOTRE_IP:1974` (identifiants `STATS_USER` / `STATS_PASS`)
-**HAProxy stats** : `http://VOTRE_IP:1976/haproxy?stats` (mêmes identifiants)
+**Interface web** : `http://VOTRE_IP:1974` (identifiants `STATS_USER` / `STATS_PASS` si auth activée)
+
+**HAProxy stats** : `http://VOTRE_IP:1976/` (mêmes identifiants)
+
+## Sources de proxies (mode proxy)
+
+En mode `proxy`, ProxySpin interroge une liste de sources configurable depuis le web UI (port 1974, carte **SOURCES DE PROXIES**).
+
+### Sources par défaut
+
+Les quatre listes [proxifly](https://github.com/proxifly/free-proxy-list) sont pré-chargées (http, https, socks4, socks5) et actives par défaut — aucune configuration nécessaire.
+
+### Gestion des sources
+
+- Plusieurs sources peuvent être ajoutées ; elles sont fusionnées et testées ensemble.
+- **Autres dépôts GitHub** : utilisez le lien **Raw** du fichier, pas l'URL de la page :
+  - ❌ `https://github.com/user/repo/blob/main/list.json`
+  - ✅ `https://raw.githubusercontent.com/user/repo/main/list.json`
+- Chaque source peut être désactivée sans être supprimée via les cases à cocher.
+
+La configuration est persistée dans `data/sources.json` (volume Docker).
+
+### Formats supportés
+
+ProxySpin détecte automatiquement le format :
+- **JSON** (liste d'objets avec `ip`, `port`, `anonymity`…) — filtre `elite` / `anonymous`
+- **Texte brut** (une entrée par ligne) — `ip:port`, `http://ip:port`, `socks5://ip:port`…
+
+## Filtre par pays (modes proxy et local)
+
+Le pool peut être restreint à un pays spécifique. Le pool complet est **conservé en mémoire** — changer de pays est instantané, sans re-fetch réseau.
+
+- **Depuis le userscript** : menu déroulant avec drapeaux
+- **Depuis le web UI** (port 1974) : menu déroulant dans la carte Statut
+- **Au démarrage** : `- COUNTRY_FILTER=FR`
+
+> ℹ️ Non disponible en mode **Tor** : les circuits Tor choisissent leur nœud de sortie automatiquement.
+
+## Mode proxies locaux
+
+Déposer des fichiers `.txt` dans le dossier `data/` (un proxy par ligne) et sélectionner `MODE=local`.
+
+Formats acceptés : `ip:port`, `http://ip:port`, `https://ip:port`, `socks4://ip:port`, `socks5://ip:port`.
+
+> ℹ️ Si vous ajoutez de nouveaux fichiers `.txt` après le démarrage, redémarrez le conteneur pour les prendre en compte.
 
 ## Interface web (port 1974)
 
-Permet de :
 - Basculer entre les modes **Tor**, **Free Proxy** et **Local** à chaud
-- Activer / désactiver la rotation automatique et modifier l'intervalle
+- Activer/désactiver la rotation automatique et modifier l'intervalle
 - Forcer un changement d'IP immédiat
-- **Filtrer les proxies par pays** (menu déroulant, modes proxy/local)
-- Visualiser les backends actifs avec leur pays et drapeau
-- Gérer les sources de proxies (ajouter, activer/désactiver, supprimer)
+- Filtrer les proxies par pays (modes proxy/local)
+- Visualiser les backends actifs avec pays et drapeau
+- Gérer les sources de proxies
 
 ## Extension navigateur (Tampermonkey)
 
 Le fichier `userscript.user.js` ajoute un panneau flottant sur toutes les pages :
 
-- Affiche l'IP de sortie actuelle avec le **drapeau du pays**
-- Indique le mode actif (**🧅 Tor**, **🌐 Free Proxy** ou **📂 Local**)
-- **Menu déroulant de sélection du pays** (modes proxy/local)
-- Détecte si le Docker tourne
+- IP de sortie actuelle avec drapeau du pays
+- Mode actif (**🧅 Tor**, **🌐 Free Proxy** ou **📂 Local**)
+- Menu déroulant de sélection du pays (modes proxy/local)
 - Bouton **Nouvelle IP** avec cooldown
-- Paramètres configurables via ⚙ : hôte Docker, port API, identifiant et mot de passe
+- Paramètres via ⚙ : hôte Docker, port API, identifiant et mot de passe
 
 **Installation :** ouvrir `userscript.user.js` dans le navigateur avec Tampermonkey installé, puis renseigner l'hôte, le port et les identifiants dans ⚙.
 
-## Rotation des IP
-
-**Mode Tor** : envoie `signal newnym` au Control Port de chaque instance → nouveau circuit à 3 nœuds → nouvelle IP de sortie.
-
-**Mode Free Proxy / Local** : re-fetche toutes les sources activées, re-teste en parallèle (15 threads), géolocalise les IPs sans pays, puis applique le filtre pays si actif.
-
-> ⚠️ Les exit nodes Tor sont publiquement listés. Certains sites bloquent systématiquement tout le trafic Tor. Le mode Free Proxy est plus discret sur ce point mais offre moins de garanties d'anonymat.
+> ℹ️ Si le proxy est actif dans le navigateur, ajoutez l'IP de votre serveur dans les exceptions proxy pour que le userscript joigne le port 1974 directement (sans passer par Tor).
 
 ## API JSON (port 1974)
 
-Toutes les requêtes nécessitent un **Basic auth** (`STATS_USER` / `STATS_PASS`).
+Les requêtes nécessitent un **Basic auth** si `API_AUTH_ENABLED=true` (défaut).
 
 | Méthode | Endpoint | Description |
 |---------|----------|-------------|
@@ -271,43 +220,18 @@ Toutes les requêtes nécessitent un **Basic auth** (`STATS_USER` / `STATS_PASS`
 
 ## Images Docker pré-buildées
 
-Les images sont publiées automatiquement sur [GitHub Container Registry](https://github.com/Aerya/ProxySpin/pkgs/container/proxyspin) :
-
 ```bash
+# Multi-arch (Docker choisit automatiquement la bonne image)
+docker pull ghcr.io/aerya/proxyspin:latest
+
 # AMD64 (PC, serveur)
 docker pull ghcr.io/aerya/proxyspin:latest-amd64
 
-# ARM64 (Raspberry Pi 4+, Apple Silicon via Rosetta, serveurs ARM)
+# ARM64 (Raspberry Pi 4+, Apple Silicon, serveurs ARM)
 docker pull ghcr.io/aerya/proxyspin:latest-arm64
-
-# Multi-arch (Docker choisit automatiquement la bonne image)
-docker pull ghcr.io/aerya/proxyspin:latest
 ```
 
 ## Mises à jour automatiques
-
-### Rebuild hebdomadaire (Tor, Privoxy, HAProxy)
-
-Chaque lundi à 3h UTC, les images Docker sont reconstruites automatiquement. Comme le Dockerfile installe les paquets via `apt-get` sans numéro de version fixé, chaque rebuild récupère automatiquement la dernière version disponible dans les dépôts officiels — y compris le [dépôt officiel Tor Project](https://deb.torproject.org).
-
-### Smoke test (protection contre les régressions)
-
-Avant chaque publication d'image, le CI exécute un smoke test automatique :
-
-```
-OK    tor     : Tor version 0.4.x.x
-OK    privoxy : Privoxy version 3.x.x
-OK    haproxy : HAProxy version 2.x.x
-OK    python3 : 3.10.x
-```
-
-Si un paquet est manquant ou cassé après une mise à jour, le workflow s'arrête et **l'image précédente reste intacte** dans le registry.
-
-### Dependabot (image de base + GitHub Actions)
-
-[Dependabot](https://github.com/Aerya/ProxySpin/network/updates) ouvre automatiquement des Pull Requests chaque lundi pour mettre à jour l'image de base `ubuntu:22.04` et les versions des GitHub Actions.
-
-### Résumé
 
 | Composant | Mécanisme | Fréquence |
 |-----------|-----------|-----------|
