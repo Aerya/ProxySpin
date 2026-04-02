@@ -319,9 +319,7 @@ class HAProxy:
   pidfile {self.PID_FILE}
 
 defaults
-  mode http
   maxconn 1024
-  option  httplog
   option  dontlognull
   retries 3
   timeout connect 5s
@@ -329,7 +327,8 @@ defaults
   timeout server 60s
 
 
-listen stats *:{STATS_PORT}
+listen stats
+  bind *:{STATS_PORT}
   mode            http
   log             global
   maxconn 10
@@ -347,21 +346,17 @@ listen stats *:{STATS_PORT}
 
 frontend rotating_proxies
   bind 127.0.0.1:{HAPROXY_PORT}
-  option http_proxy
+  mode tcp
   default_backend tor
 
 backend tor
-  option http_proxy
+  mode tcp
   balance leastconn
 
 {servers}
 """
         with open(self.CONFIG_PATH, 'w') as f:
             f.write(cfg)
-
-# ─── Proxy HTTP avec auth (port 1973) ────────────────────────────────────────
-# Implémentation inspirée de Gluetun (github.com/qdm12/gluetun)
-# Gère Proxy-Authorization → 407, puis tunnele vers HAProxy interne.
 
 # ─── Tunnel socket bidirectionnel ────────────────────────────────────────────
 
