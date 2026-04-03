@@ -1,8 +1,18 @@
 # ⬡ ProxySpin
 
-> 🇬🇧 [English version](README.en.md)
+> 🇬🇧 [English version](README.en.md) — 📝 [Article de présentation (fr)](https://...) *(à venir)*
 
 Proxy HTTP rotatif anonymisant basé sur **Tor**, avec support optionnel de proxies SOCKS4/SOCKS5 privés — interface web et extension navigateur.
+
+---
+
+> ⚠️ **Avertissement**
+>
+> ProxySpin est un outil de rotation de proxies conçu pour améliorer la confidentialité et la gestion des connexions sortantes. Toutefois, il ne garantit en aucun cas un anonymat total.
+>
+> Il s'agit avant tout d'un proxy HTTP/HTTPS avancé, et non d'une solution de sécurité complète. De nombreux facteurs externes peuvent compromettre l'anonymat, notamment la configuration du navigateur, les fuites (WebRTC, DNS), le fingerprinting ou encore le comportement utilisateur.
+>
+> Même en mode Tor, l'anonymat dépend fortement de l'environnement global d'utilisation.
 
 ---
 
@@ -100,13 +110,13 @@ Quand une auth est désactivée, les variables `PROXY_USER`/`PROXY_PASS` ou `STA
 ### Détail des variables
 
 **`ROTATION_INTERVAL`**
-Intervalle en secondes entre deux renouvellements automatiques de circuits Tor. La rotation automatique est **active uniquement en mode Tor** et se désactive automatiquement en modes `proxy` et `local`. Elle peut être activée/désactivée manuellement depuis le Web UI à tout moment.
+Intervalle en secondes entre deux renouvellements automatiques de circuits Tor. La rotation automatique est **active uniquement en mode Tor** et se désactive automatiquement en mode `local`. Elle peut être activée/désactivée manuellement depuis le Web UI à tout moment.
 
 **`tors`**
 En mode `tor`, ProxySpin démarre N processus Tor complètement indépendants. Chacun construit son propre circuit chiffré à 3 nœuds et possède sa propre IP de sortie. HAProxy répartit les requêtes entre ces N instances. Avec `tors=10`, vous avez 10 IPs de sortie différentes disponibles simultanément.
 
 **`MAX_PROXIES`**
-En modes `proxy` et `local`, seuls les `MAX_PROXIES` premiers proxies opérationnels sont activés dans HAProxy. Si un filtre pays est actif, ProxySpin élargit la recherche à `MAX_PROXIES × 5` candidats.
+En mode `local`, seuls les `MAX_PROXIES` premiers proxies opérationnels sont activés dans HAProxy. Si un filtre pays est actif, ProxySpin élargit la recherche à `MAX_PROXIES × 5` candidats.
 
 **`COUNTRY_FILTER`**
 Entièrement optionnel. Peut être modifié à tout moment depuis le web UI ou le userscript, sans redémarrer.
@@ -135,6 +145,8 @@ Les trois ports exposés peuvent être protégés par **HTTP Basic auth** :
 ## Utilisation
 
 **Configurer le navigateur** pour utiliser `http://VOTRE_IP:1973` comme proxy HTTP (identifiants `PROXY_USER` / `PROXY_PASS` si auth activée).
+
+![Configuration proxy Firefox](screens/proxyspin1.png)
 
 **Interface web** : `http://VOTRE_IP:1974` (identifiants `STATS_USER` / `STATS_PASS` si auth activée)
 
@@ -179,6 +191,8 @@ Le pool peut être restreint à un pays spécifique. Le pool complet est **conse
 - Visualiser les backends actifs avec pays et drapeau
 - Gérer les URLs de sources SOCKS (optionnel)
 
+![Interface web ProxySpin](screens/proxyspin2.png)
+
 ## Extension navigateur (Tampermonkey)
 
 Le fichier `userscript.user.js` ajoute un panneau flottant sur toutes les pages :
@@ -192,6 +206,20 @@ Le fichier `userscript.user.js` ajoute un panneau flottant sur toutes les pages 
 
 > ℹ️ Si le proxy est actif dans le navigateur, ajoutez l'IP de votre serveur dans les exceptions proxy pour que le userscript joigne le port 1974 directement (sans passer par Tor).
 
+| Réduit | Déployé | Paramètres |
+|--------|---------|------------|
+| ![Userscript réduit](screens/proxyspin3.png) | ![Userscript déployé](screens/proxyspin4.png) | ![Userscript paramètres](screens/proxyspin5.png) |
+
+## En action
+
+Vérification de l'IP de sortie et de la détection Tor :
+
+![Vérification IP de sortie via Tor](screens/proxyspin6.png)
+
+Test de fuite IP / WebRTC :
+
+![Test de fuite WebRTC](screens/proxyspin7.png)
+
 ## API JSON (port 1974)
 
 Les requêtes nécessitent un **Basic auth** si `API_AUTH_ENABLED=true` (défaut).
@@ -201,9 +229,9 @@ Les requêtes nécessitent un **Basic auth** si `API_AUTH_ENABLED=true` (défaut
 | `GET` | `/api/status` | État général (mode, instances, filtre pays…) |
 | `GET` | `/api/backends` | Liste des backends actifs avec pays |
 | `GET` | `/api/countries` | Pays disponibles dans le pool actuel |
-| `GET` | `/api/sources` | Sources de proxies configurées |
+| `GET` | `/api/sources` | Sources SOCKS configurées |
 | `POST` | `/api/rotate` | Forcer une rotation |
-| `POST` | `/api/mode` | Changer de mode (`{"mode":"proxy"}`) |
+| `POST` | `/api/mode` | Changer de mode (`{"mode":"local"}`) |
 | `POST` | `/api/config` | Modifier la config (`auto_rotation`, `rotation_interval`) |
 | `POST` | `/api/country` | Définir le filtre pays (`{"country":"FR"}` ou `""`) |
 | `POST` | `/api/sources` | Ajouter une source (`{"url":"…","label":"…"}`) |
@@ -231,6 +259,15 @@ docker pull ghcr.io/aerya/proxyspin:latest-arm64
 | Image de base Ubuntu | Dependabot PR | Lundi |
 | GitHub Actions (CI) | Dependabot PR | Lundi |
 | Régression après màj | Smoke test CI | À chaque build |
+
+## Ressources
+
+- [Nos oignons](https://nos-oignons.net) — association française de nœuds de sortie Tor
+- [The Tor Project](https://www.torproject.org) — site officiel du projet Tor
+- [Snowflake](https://snowflake.torproject.org/) — pont Tor résistant à la censure
+- [Tor Project Blog](https://blog.torproject.org) — actualités et mises à jour du projet
+- [Guide pratique : utiliser Tor](https://ssd.eff.org/fr/module/guide-pratique-utiliser-tor) — EFF Surveillance Self-Defense
+- [Whonix](https://www.whonix.org) — système d'exploitation axé sur la confidentialité via Tor
 
 ---
 

@@ -6,6 +6,16 @@ Anonymizing rotating HTTP proxy based on **Tor**, with optional support for priv
 
 ---
 
+> ⚠️ **Disclaimer**
+>
+> ProxySpin is a proxy rotation tool designed to improve privacy and manage outgoing connections. However, it does not guarantee complete anonymity under any circumstances.
+>
+> It is primarily an advanced HTTP/HTTPS proxy, not a comprehensive security solution. Many external factors can compromise anonymity, including browser configuration, leaks (WebRTC, DNS), fingerprinting, and user behaviour.
+>
+> Even in Tor mode, anonymity heavily depends on the overall usage environment.
+
+---
+
 ## Description
 
 ProxySpin exposes a **single entry point** (port 1973) behind which each request can exit with a different IP address. It supports two modes:
@@ -27,13 +37,13 @@ Browser / Client
    HAProxy :11973          ← internal only (localhost), TCP load balancer
         │  balance leastconn
         ├── Privoxy :20000
-        ├── Privoxy :20001   ← each instance forwards to Tor or a free proxy
+        ├── Privoxy :20001   ← each instance forwards to Tor or a SOCKS proxy
         └── Privoxy :2000N
                 │
         ┌───────┴──────────┐
-        │ Tor mode         │ Free Proxy / Local mode
+        │ Tor mode         │ Local mode (private SOCKS)
         │                  │
-   Tor :10000         HTTP/SOCKS Proxy
+   Tor :10000         SOCKS4/5 Proxy
    Tor :10001         (country-filtered if active)
    Tor :1000N
         │
@@ -74,8 +84,8 @@ All options are environment variables in `docker-compose.yml`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ROTATION_INTERVAL` | `60` | Tor circuit rotation interval in seconds |
-| `tors` | `10` | Number of parallel Tor instances (mode `tor`) |
-| `MAX_PROXIES` | `20` | Number of proxies active in HAProxy (modes `proxy` and `local`) |
+| `tors` | `10` | Number of parallel Tor instances (`tor` mode) |
+| `MAX_PROXIES` | `20` | Number of active SOCKS proxies in HAProxy (`local` mode) |
 | `COUNTRY_FILTER` | — | Country filter at startup, 2-letter ISO code (e.g. `FR`, `DE`) |
 | `PROXY_USER` | — | Proxy username for port 1973 |
 | `PROXY_PASS` | — | Proxy password |
@@ -100,13 +110,13 @@ When auth is disabled, the corresponding `PROXY_USER`/`PROXY_PASS` or `STATS_USE
 ### Variable details
 
 **`ROTATION_INTERVAL`**
-Interval in seconds between automatic Tor circuit renewals. Auto-rotation is **active only in Tor mode** and is automatically disabled in `proxy` and `local` modes. It can be toggled manually from the Web UI at any time.
+Interval in seconds between automatic Tor circuit renewals. Auto-rotation is **active only in Tor mode** and is automatically disabled in `local` mode. It can be toggled manually from the Web UI at any time.
 
 **`tors`**
 In `tor` mode, ProxySpin starts N completely independent Tor processes. Each one builds its own 3-hop encrypted circuit and has its own exit IP. HAProxy distributes requests across these N instances. With `tors=10` you have 10 different exit IPs available simultaneously.
 
 **`MAX_PROXIES`**
-In `proxy` and `local` modes, only the first `MAX_PROXIES` working proxies are activated in HAProxy. When a country filter is active, ProxySpin widens the search to `MAX_PROXIES × 5` candidates.
+In `local` mode, only the first `MAX_PROXIES` working proxies are activated in HAProxy. When a country filter is active, ProxySpin widens the search to `MAX_PROXIES × 5` candidates.
 
 **`COUNTRY_FILTER`**
 Entirely optional. Can be changed at any time from the web UI or userscript, no restart required.
@@ -135,6 +145,8 @@ All three exposed ports can be protected by **HTTP Basic auth**:
 ## Usage
 
 **Configure your browser** to use `http://YOUR_IP:1973` as an HTTP proxy (credentials `PROXY_USER` / `PROXY_PASS` if auth is enabled).
+
+![Firefox proxy configuration](screens/proxyspin1.png)
 
 **Web panel**: `http://YOUR_IP:1974` (credentials `STATS_USER` / `STATS_PASS` if auth is enabled)
 
@@ -179,6 +191,8 @@ The proxy pool can be restricted to a specific country. The full pool is **kept 
 - View active backends with country and flag
 - Manage SOCKS source URLs (optional)
 
+![ProxySpin web panel](screens/proxyspin2.png)
+
 ## Browser Extension (Tampermonkey)
 
 The `userscript.user.js` file adds a floating panel on every page:
@@ -192,6 +206,20 @@ The `userscript.user.js` file adds a floating panel on every page:
 
 > ℹ️ If the proxy is active in the browser, add your server IP to the proxy exceptions so the userscript can reach port 1974 directly (without going through Tor).
 
+| Collapsed | Expanded | Settings |
+|-----------|----------|----------|
+| ![Userscript collapsed](screens/proxyspin3.png) | ![Userscript expanded](screens/proxyspin4.png) | ![Userscript settings](screens/proxyspin5.png) |
+
+## In action
+
+Exit IP verification and Tor detection:
+
+![Exit IP check via Tor](screens/proxyspin6.png)
+
+IP leak / WebRTC test:
+
+![WebRTC leak test](screens/proxyspin7.png)
+
 ## JSON API (port 1974)
 
 Requests require **Basic auth** if `API_AUTH_ENABLED=true` (default).
@@ -203,7 +231,7 @@ Requests require **Basic auth** if `API_AUTH_ENABLED=true` (default).
 | `GET` | `/api/countries` | Available countries in the current pool |
 | `GET` | `/api/sources` | Configured SOCKS source URLs |
 | `POST` | `/api/rotate` | Force a rotation |
-| `POST` | `/api/mode` | Switch mode (`{"mode":"proxy"}`) |
+| `POST` | `/api/mode` | Switch mode (`{"mode":"local"}`) |
 | `POST` | `/api/config` | Update config (`auto_rotation`, `rotation_interval`) |
 | `POST` | `/api/country` | Set country filter (`{"country":"FR"}` or `""`) |
 | `POST` | `/api/sources` | Add a source (`{"url":"…","label":"…"}`) |
@@ -231,6 +259,15 @@ docker pull ghcr.io/aerya/proxyspin:latest-arm64
 | Ubuntu base image | Dependabot PR | Monday |
 | GitHub Actions (CI) | Dependabot PR | Monday |
 | Regression after update | Smoke test CI | Every build |
+
+## Resources
+
+- [Nos oignons](https://nos-oignons.net) — French association running Tor exit nodes
+- [The Tor Project](https://www.torproject.org) — official Tor project website
+- [Snowflake](https://snowflake.torproject.org/) — censorship-resistant Tor bridge
+- [Tor Project Blog](https://blog.torproject.org) — news and updates from the Tor Project
+- [Surveillance Self-Defense: Tor](https://ssd.eff.org/fr/module/guide-pratique-utiliser-tor) — EFF practical guide (fr)
+- [Whonix](https://www.whonix.org) — privacy-focused OS routing all traffic through Tor
 
 ---
 
