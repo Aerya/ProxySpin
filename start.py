@@ -635,20 +635,31 @@ _SOCKS_PROBE_HOST = '1.1.1.1'  # IP pour les handshakes SOCKS (pas de résolutio
 _SOCKS_PROBE_PORT = 443
 
 def _test_socks4(ip, port, timeout):
-    """Retourne True si le proxy répond correctement au handshake SOCKS4."""
+    """Handshake SOCKS4 + vérification que le tunnel reste ouvert (pas de faux positifs)."""
     try:
         s = socket.create_connection((ip, port), timeout=timeout)
         req = struct.pack('!BBH', 4, 1, _SOCKS_PROBE_PORT) + socket.inet_aton(_SOCKS_PROBE_HOST) + b'\x00'
         s.sendall(req)
         s.settimeout(timeout)
         resp = s.recv(8)
-        s.close()
-        return len(resp) >= 2 and resp[1] == 90
+        if len(resp) < 2 or resp[1] != 90:
+            s.close()
+            return False
+        # Code 90 = connecté. Vérifie que le tunnel reste ouvert :
+        # 1.1.1.1:443 n'envoie rien sans TLS ClientHello → timeout = tunnel actif, close = proxy KO
+        s.settimeout(2)
+        try:
+            data = s.recv(1)
+            s.close()
+            return False  # La connexion s'est fermée immédiatement — proxy inutilisable
+        except socket.timeout:
+            s.close()
+            return True   # Tunnel vivant
     except Exception:
         return False
 
 def _test_socks5(ip, port, timeout):
-    """Retourne True si le proxy répond correctement au handshake SOCKS5."""
+    """Handshake SOCKS5 + vérification que le tunnel reste ouvert (pas de faux positifs)."""
     try:
         s = socket.create_connection((ip, port), timeout=timeout)
         s.sendall(b'\x05\x01\x00')
@@ -660,8 +671,18 @@ def _test_socks5(ip, port, timeout):
         req = b'\x05\x01\x00\x01' + socket.inet_aton(_SOCKS_PROBE_HOST) + struct.pack('!H', _SOCKS_PROBE_PORT)
         s.sendall(req)
         resp = s.recv(10)
-        s.close()
-        return len(resp) >= 2 and resp[1] == 0
+        if len(resp) < 2 or resp[1] != 0:
+            s.close()
+            return False
+        # Même vérification tunnel
+        s.settimeout(2)
+        try:
+            data = s.recv(1)
+            s.close()
+            return False
+        except socket.timeout:
+            s.close()
+            return True
     except Exception:
         return False
 

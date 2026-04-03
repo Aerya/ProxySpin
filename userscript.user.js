@@ -353,11 +353,23 @@
           s.loading_message || ''
         );
       } else if (s.mode === 'tor') {
-        setStateBar('tor', '🧅', t('conn_tor'), `${s.instances} ${t('circuits')}`);
+        if (s.instances > 0) {
+          setStateBar('tor', '🧅', t('conn_tor'), `${s.instances} ${t('circuits')}`);
+        } else {
+          setStateBar('loading', '<span class="rp-spin">⟳</span>', t('searching'), t('conn_tor'));
+        }
       } else if (s.mode === 'local') {
-        setStateBar('proxy', '📂', t('conn_local'), `${s.instances} ${t('proxies_active')}`);
+        if (s.instances > 0) {
+          setStateBar('proxy', '📂', t('conn_local'), `${s.instances} ${t('proxies_active')}`);
+        } else {
+          setStateBar('loading', '<span class="rp-spin">⟳</span>', t('searching'), t('conn_local'));
+        }
       } else {
-        setStateBar('proxy', '🌐', t('conn_proxy'), `${s.instances} ${t('proxies_active')}`);
+        if (s.instances > 0) {
+          setStateBar('proxy', '🌐', t('conn_proxy'), `${s.instances} ${t('proxies_active')}`);
+        } else {
+          setStateBar('loading', '<span class="rp-spin">⟳</span>', t('searching'), t('conn_proxy'));
+        }
       }
 
       if (s.mode !== 'tor' && !s.loading) {
