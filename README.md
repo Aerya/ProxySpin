@@ -1,6 +1,6 @@
 # ⬡ ProxySpin
 
-> 🇬🇧 [English version](README.en.md) — 📝 [Article de présentation (fr)](https://...) *(à venir)*
+> 🇬🇧 [English version](README.en.md) — 📝 [Article de présentation (fr)](https://upandclear.org/2026/04/03/proxyspin-proxy-rotatif-anonymisant-base-sur-tor-avec-support-optionnel-de-proxies-socks4-socks5-interface-web-et-extension-navigateur/)
 
 Proxy HTTP rotatif anonymisant basé sur **Tor**, avec support optionnel de proxies SOCKS4/SOCKS5 privés — interface web et extension navigateur.
 
