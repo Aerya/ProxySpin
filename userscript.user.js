@@ -194,6 +194,7 @@
   // ─── DOM ──────────────────────────────────────────────────────────────────
   const panel = document.createElement('div');
   panel.id = 'rp-panel';
+  panel.classList.add('rp-collapsed');
   panel.innerHTML = `
     <div id="rp-header">
       <span id="rp-title">⬡ PROXYSPIN</span>
@@ -202,7 +203,7 @@
         <button class="rp-lang" id="rp-btn-lang-en" title="English">🇬🇧</button>
         <button class="rp-ctrl" id="rp-btn-ui">🖥</button>
         <button class="rp-ctrl" id="rp-btn-cfg">⚙</button>
-        <button class="rp-ctrl" id="rp-btn-col">−</button>
+        <button class="rp-ctrl" id="rp-btn-col">+</button>
       </div>
     </div>
     <div id="rp-body">

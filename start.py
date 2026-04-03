@@ -14,6 +14,7 @@ import random
 import select
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -628,6 +629,77 @@ class SourceManager:
             self._save(sources)
             return {'ok': True, 'sources': sources}
 
+# ─── Helpers de test proxy ────────────────────────────────────────────────────
+
+_PROBE_HOST = '1.1.1.1'
+_PROBE_PORT = 80
+
+def _test_socks4(ip, port, timeout):
+    """Retourne True si le proxy répond correctement au handshake SOCKS4."""
+    try:
+        s = socket.create_connection((ip, port), timeout=timeout)
+        # CONNECT to _PROBE_HOST:_PROBE_PORT via SOCKS4
+        req = struct.pack('!BBH', 4, 1, _PROBE_PORT) + socket.inet_aton(_PROBE_HOST) + b'\x00'
+        s.sendall(req)
+        s.settimeout(timeout)
+        resp = s.recv(8)
+        s.close()
+        return len(resp) >= 2 and resp[1] == 90
+    except Exception:
+        return False
+
+def _test_socks5(ip, port, timeout):
+    """Retourne True si le proxy répond correctement au handshake SOCKS5."""
+    try:
+        s = socket.create_connection((ip, port), timeout=timeout)
+        s.sendall(b'\x05\x01\x00')  # version=5, nmethods=1, no-auth
+        s.settimeout(timeout)
+        resp = s.recv(2)
+        if len(resp) < 2 or resp[0] != 5 or resp[1] == 0xFF:
+            s.close()
+            return False
+        # CONNECT ipv4
+        req = b'\x05\x01\x00\x01' + socket.inet_aton(_PROBE_HOST) + struct.pack('!H', _PROBE_PORT)
+        s.sendall(req)
+        resp = s.recv(10)
+        s.close()
+        return len(resp) >= 2 and resp[1] == 0
+    except Exception:
+        return False
+
+def _test_http_connect(ip, port, timeout):
+    """Teste un proxy HTTP via CONNECT (nécessaire pour HTTPS) + GET HTTP."""
+    target = f'{_PROBE_HOST}:{_PROBE_PORT}'
+    try:
+        s = socket.create_connection((ip, port), timeout=timeout)
+        s.settimeout(timeout)
+        s.sendall(f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n'.encode())
+        resp = b''
+        while b'\r\n\r\n' not in resp:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            resp += chunk
+            if len(resp) > 4096:
+                break
+        s.close()
+        first = resp.split(b'\r\n')[0]
+        return b'200' in first
+    except Exception:
+        return False
+
+def _test_proxy(proxy, timeout):
+    """Retourne True si le proxy est fonctionnel et supporte CONNECT (HTTPS)."""
+    protocol = proxy.get('protocol', 'http')
+    ip, port = proxy['ip'], proxy['port']
+    if protocol == 'socks4':
+        return _test_socks4(ip, port, timeout)
+    if protocol in ('socks5', 'socks5h'):
+        return _test_socks5(ip, port, timeout)
+    # HTTP / HTTPS proxy : tester CONNECT pour garantir le support HTTPS
+    return _test_http_connect(ip, port, timeout)
+
+
 # ─── FreeProxyFetcher ─────────────────────────────────────────────────────────
 
 class FreeProxyFetcher:
@@ -769,18 +841,7 @@ class FreeProxyFetcher:
         return 'http'
 
     def _test(self, proxy):
-        if 'socks' in proxy['protocol']:
-            try:
-                with socket.create_connection((proxy['ip'], proxy['port']), timeout=self.TEST_TIMEOUT):
-                    return True
-            except Exception:
-                return False
-        try:
-            opener = build_opener(ProxyHandler({'http': f"http://{proxy['ip']}:{proxy['port']}"}))
-            with opener.open(self.TEST_URL, timeout=self.TEST_TIMEOUT) as r:
-                return r.status == 200
-        except Exception:
-            return False
+        return _test_proxy(proxy, self.TEST_TIMEOUT)
 
 # ─── LocalProxyLoader ────────────────────────────────────────────────────────
 
@@ -891,18 +952,7 @@ class LocalProxyLoader:
         return {'ip': ip.strip(), 'port': port, 'protocol': protocol, 'score': 0, 'country_code': None, 'country_name': None}
 
     def _test(self, proxy):
-        if 'socks' in proxy['protocol']:
-            try:
-                with socket.create_connection((proxy['ip'], proxy['port']), timeout=self.TEST_TIMEOUT):
-                    return True
-            except Exception:
-                return False
-        try:
-            opener = build_opener(ProxyHandler({'http': f"http://{proxy['ip']}:{proxy['port']}"}))
-            with opener.open(self.TEST_URL, timeout=self.TEST_TIMEOUT) as r:
-                return r.status == 200
-        except Exception:
-            return False
+        return _test_proxy(proxy, self.TEST_TIMEOUT)
 
 # ─── ProxyManager ─────────────────────────────────────────────────────────────
 
