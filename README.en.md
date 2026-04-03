@@ -2,17 +2,18 @@
 
 > 🇫🇷 [Version française](README.md)
 
-Anonymizing rotating HTTP proxy based on Tor and free proxies, with a web control panel and browser extension.
+Anonymizing rotating HTTP proxy based on **Tor**, with optional support for private SOCKS4/SOCKS5 proxies — web control panel and browser extension.
 
 ---
 
 ## Description
 
-ProxySpin exposes a **single entry point** (port 1973) behind which each request can exit with a different IP address. It supports three modes:
+ProxySpin exposes a **single entry point** (port 1973) behind which each request can exit with a different IP address. It supports two modes:
 
-- **Tor**: N independent Tor instances, each with its own 3-relay encrypted circuit
-- **Free Proxy**: **SOCKS4/SOCKS5** free proxies fetched automatically from configurable sources (proxifly by default), filtered to keep only `elite` or `anonymous` proxies
-- **Local**: a manually maintained proxy list provided as a text file
+- **Tor** *(primary mode)*: N independent Tor instances, each with its own 3-relay encrypted circuit — strong anonymity, no extra configuration required
+- **Local** *(optional)*: private or paid SOCKS4/SOCKS5 proxies provided manually (`.txt` files) or via URLs configured in the Web UI
+
+> ⚠️ **Free** SOCKS proxies (public lists) are unreliable and do not guarantee anonymity. This mode is designed for **private or commercial** trusted proxies.
 
 ## Architecture
 
@@ -139,35 +140,27 @@ All three exposed ports can be protected by **HTTP Basic auth**:
 
 **HAProxy stats**: `http://YOUR_IP:1976/` (same credentials) — disabled by default, uncomment in `docker-compose.yml` to enable
 
-## Proxy sources (proxy mode)
+## Local SOCKS mode (optional)
 
-In `proxy` mode, ProxySpin fetches from a configurable source list managed from the web panel (port 1974, **PROXY SOURCES** card).
+In `local` mode, ProxySpin loads and tests your private or paid SOCKS4/SOCKS5 proxies, then rotates them through HAProxy.
 
-### Default sources
+> ⚠️ **SOCKS proxies only.** HTTP proxies do not support `CONNECT` (required for HTTPS). Only SOCKS proxies natively tunnel both HTTP and HTTPS without exposing the real IP.
 
-The [proxifly](https://github.com/proxifly/free-proxy-list) **socks4** and **socks5** lists are pre-loaded and active by default — no configuration needed.
+### Proxy sources
 
-> ⚠️ **Why SOCKS only?** Free HTTP proxies do not support `CONNECT`, which is required for HTTPS traffic (virtually the entire modern web). Without `CONNECT`, the browser falls back to a direct connection and leaks the real IP. Only SOCKS proxies natively tunnel both HTTP and HTTPS.
+Two methods, combinable:
 
-### Managing sources
+**1. Local files** — Drop `.txt` files into the `data/` folder (one proxy per line):
+```
+socks4://1.2.3.4:1080
+socks5://5.6.7.8:1080
+```
 
-- Multiple sources can be added; they are merged and tested together.
-- **Other GitHub repos**: use the **Raw** link of the file, not the GitHub page URL:
-  - ❌ `https://github.com/user/repo/blob/main/list.json`
-  - ✅ `https://raw.githubusercontent.com/user/repo/main/list.json`
-- Each source can be disabled without being deleted via the checkboxes.
+**2. Source URLs** *(secondary)* — Add URLs from the Web UI (port 1974, **SOURCES** card). URLs point to text lists accessible online. The configuration is persisted in `data/sources.json`.
 
-The configuration is persisted in `data/sources.json` (Docker volume).
+> ℹ️ If you add new `.txt` files after startup, restart the container for them to be picked up.
 
-### Supported formats
-
-ProxySpin auto-detects the format:
-- **JSON** (list of objects with `ip`, `port`, `anonymity`…) — filtered to `elite` / `anonymous`
-- **Plain text** (one entry per line) — `socks4://ip:port`, `socks5://ip:port`
-
-> HTTP/HTTPS entries are silently ignored.
-
-## Country filter (proxy and local modes)
+## Country filter (local mode)
 
 The proxy pool can be restricted to a specific country. The full pool is **kept in memory** — changing the country is instant, no network re-fetch.
 
@@ -177,29 +170,21 @@ The proxy pool can be restricted to a specific country. The full pool is **kept 
 
 > ℹ️ Not available in **Tor** mode: Tor circuits select their exit node automatically.
 
-## Local proxy mode
-
-Drop `.txt` files into the `data/` folder (one proxy per line) and set `MODE=local`.
-
-Accepted formats: `socks4://ip:port`, `socks5://ip:port`. HTTP/HTTPS entries are ignored.
-
-> ℹ️ If you add new `.txt` files after startup, restart the container for them to be picked up.
-
 ## Web Panel (port 1974)
 
-- Switch between **Tor**, **Free Proxy** and **Local** modes on the fly
+- Switch between **Tor** and **Local** modes on the fly
 - Enable / disable automatic rotation and change the interval
 - Force an immediate IP change
-- Filter proxies by country (proxy/local modes)
+- Filter proxies by country (local mode)
 - View active backends with country and flag
-- Manage proxy sources
+- Manage SOCKS source URLs (optional)
 
 ## Browser Extension (Tampermonkey)
 
 The `userscript.user.js` file adds a floating panel on every page:
 
-- Active mode (**🧅 Tor**, **🌐 Free Proxy** or **📂 Local**)
-- Country selection dropdown (proxy/local modes)
+- Active mode (**🧅 Tor** or **📂 Local**)
+- Country selection dropdown (local mode)
 - **New IP** button with cooldown
 - Configurable settings via ⚙: Docker host, API port, username and password
 
@@ -216,7 +201,7 @@ Requests require **Basic auth** if `API_AUTH_ENABLED=true` (default).
 | `GET` | `/api/status` | General state (mode, instances, country filter…) |
 | `GET` | `/api/backends` | Active backends list with country |
 | `GET` | `/api/countries` | Available countries in the current pool |
-| `GET` | `/api/sources` | Configured proxy sources |
+| `GET` | `/api/sources` | Configured SOCKS source URLs |
 | `POST` | `/api/rotate` | Force a rotation |
 | `POST` | `/api/mode` | Switch mode (`{"mode":"proxy"}`) |
 | `POST` | `/api/config` | Update config (`auto_rotation`, `rotation_interval`) |

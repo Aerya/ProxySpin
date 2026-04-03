@@ -12,8 +12,8 @@ services:
       - ROTATION_INTERVAL=60 # secondes
       # ── Tor ──
       - tors=10 # nombre d'instances Tor
-      # ── Free proxy ──
-      - MAX_PROXIES=20 # proxies gratuits à conserver
+      # ── Proxies SOCKS (mode local) ──
+      - MAX_PROXIES=20 # nombre max de proxies SOCKS actifs dans HAProxy
       # ── Auth proxy port 1973 ──
       - PROXY_USER=monuser
       - PROXY_PASS=changeme

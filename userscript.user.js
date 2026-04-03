@@ -23,7 +23,6 @@
       searching:      'Recherche en cours\u2026',
       conn_tor:       'Connecté via Tor',
       conn_local:     'Connecté via proxies locaux',
-      conn_proxy:     'Connecté via Free Proxy',
       circuits:       'circuit(s)',
       proxies_active: 'proxy(s) actif(s)',
       lbl_circuits:   'Circuits actifs',
@@ -50,7 +49,6 @@
       searching:      'Searching\u2026',
       conn_tor:       'Connected via Tor',
       conn_local:     'Connected via local proxies',
-      conn_proxy:     'Connected via Free Proxy',
       circuits:       'circuit(s)',
       proxies_active: 'active proxy(s)',
       lbl_circuits:   'Active circuits',
@@ -363,12 +361,6 @@
           setStateBar('proxy', '📂', t('conn_local'), `${s.instances} ${t('proxies_active')}`);
         } else {
           setStateBar('loading', '<span class="rp-spin">⟳</span>', t('searching'), t('conn_local'));
-        }
-      } else {
-        if (s.instances > 0) {
-          setStateBar('proxy', '🌐', t('conn_proxy'), `${s.instances} ${t('proxies_active')}`);
-        } else {
-          setStateBar('loading', '<span class="rp-spin">⟳</span>', t('searching'), t('conn_proxy'));
         }
       }
 

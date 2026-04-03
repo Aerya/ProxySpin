@@ -2,17 +2,18 @@
 
 > 🇬🇧 [English version](README.en.md)
 
-Proxy HTTP rotatif anonymisant basé sur Tor et des proxies gratuits, avec interface web et extension navigateur.
+Proxy HTTP rotatif anonymisant basé sur **Tor**, avec support optionnel de proxies SOCKS4/SOCKS5 privés — interface web et extension navigateur.
 
 ---
 
 ## Description
 
-ProxySpin expose **un point d'entrée unique** (port 1973) derrière lequel chaque requête peut sortir avec une IP différente. Il supporte trois modes :
+ProxySpin expose **un point d'entrée unique** (port 1973) derrière lequel chaque requête peut sortir avec une IP différente. Il supporte deux modes :
 
-- **Tor** : N instances Tor indépendantes, chacune avec son propre circuit chiffré à 3 nœuds relais
-- **Free Proxy** : proxies **SOCKS4/SOCKS5** gratuits récupérés automatiquement depuis des sources configurables (proxifly par défaut), filtrés pour ne garder que les proxies `elite` ou `anonymous`
-- **Local** : liste de proxies fournie manuellement dans un fichier texte
+- **Tor** *(mode principal)* : N instances Tor indépendantes, chacune avec son propre circuit chiffré à 3 nœuds relais — anonymat fort, sans configuration supplémentaire
+- **Local** *(optionnel)* : proxies SOCKS4/SOCKS5 privés ou payants fournis manuellement (fichiers `.txt`) ou via des URLs de listes configurées dans le Web UI
+
+> ⚠️ Les proxies SOCKS **gratuits** (listes publiques) sont peu fiables et ne garantissent pas l'anonymat. Ce mode est conçu pour des proxies **privés ou commerciaux** de confiance.
 
 ## Architecture
 
@@ -26,13 +27,13 @@ Navigateur / Client
    HAProxy :11973          ← interne uniquement (localhost), load balancer TCP
         │  balance leastconn
         ├── Privoxy :20000
-        ├── Privoxy :20001   ← chaque instance forward vers Tor ou un proxy gratuit
+        ├── Privoxy :20001   ← chaque instance forward vers Tor ou un proxy SOCKS
         └── Privoxy :2000N
                 │
         ┌───────┴──────────┐
-        │ Mode Tor         │ Mode Free Proxy / Local
+        │ Mode Tor         │ Mode Local (SOCKS privés)
         │                  │
-   Tor :10000         Proxy HTTP/SOCKS
+   Tor :10000         Proxy SOCKS4/5
    Tor :10001         (filtré par pays si actif)
    Tor :1000N
         │
@@ -74,7 +75,7 @@ Toutes les options sont des variables d'environnement dans `docker-compose.yml` 
 |----------|--------|-------------|
 | `ROTATION_INTERVAL` | `60` | Intervalle de rotation Tor en secondes |
 | `tors` | `10` | Nombre d'instances Tor parallèles (mode `tor`) |
-| `MAX_PROXIES` | `20` | Nombre de proxies actifs dans HAProxy (modes `proxy` et `local`) |
+| `MAX_PROXIES` | `20` | Nombre de proxies SOCKS actifs dans HAProxy (mode `local`) |
 | `COUNTRY_FILTER` | — | Filtre pays au démarrage, code ISO 2 lettres (ex. `FR`, `DE`) |
 | `PROXY_USER` | — | Identifiant proxy port 1973 |
 | `PROXY_PASS` | — | Mot de passe proxy |
@@ -139,35 +140,27 @@ Les trois ports exposés peuvent être protégés par **HTTP Basic auth** :
 
 **HAProxy stats** : `http://VOTRE_IP:1976/` (mêmes identifiants) — port désactivé par défaut, décommenter dans `docker-compose.yml` pour l'activer
 
-## Sources de proxies (mode proxy)
+## Mode SOCKS local (optionnel)
 
-En mode `proxy`, ProxySpin interroge une liste de sources configurable depuis le web UI (port 1974, carte **SOURCES DE PROXIES**).
+En mode `local`, ProxySpin charge et teste vos proxies SOCKS4/SOCKS5 privés ou payants, puis les fait tourner via HAProxy.
 
-### Sources par défaut
+> ⚠️ **Proxies SOCKS uniquement.** Les proxies HTTP ne supportent pas `CONNECT` (indispensable pour HTTPS). Seuls les proxies SOCKS tunnelisent nativement HTTP et HTTPS sans exposer l'IP réelle.
 
-Les listes [proxifly](https://github.com/proxifly/free-proxy-list) **socks4** et **socks5** sont pré-chargées et actives par défaut — aucune configuration nécessaire.
+### Sources de proxies
 
-> ⚠️ **Pourquoi uniquement SOCKS ?** Les proxies HTTP gratuits ne supportent pas `CONNECT`, ce qui est indispensable pour le trafic HTTPS (quasi-totalité du web). Sans `CONNECT`, le navigateur bascule en connexion directe et expose l'IP réelle. Seuls les proxies SOCKS tunnelisent nativement HTTP et HTTPS.
+Deux méthodes, cumulables :
 
-### Gestion des sources
+**1. Fichiers locaux** — Déposer des fichiers `.txt` dans le dossier `data/` (un proxy par ligne) :
+```
+socks4://1.2.3.4:1080
+socks5://5.6.7.8:1080
+```
 
-- Plusieurs sources peuvent être ajoutées ; elles sont fusionnées et testées ensemble.
-- **Autres dépôts GitHub** : utilisez le lien **Raw** du fichier, pas l'URL de la page :
-  - ❌ `https://github.com/user/repo/blob/main/list.json`
-  - ✅ `https://raw.githubusercontent.com/user/repo/main/list.json`
-- Chaque source peut être désactivée sans être supprimée via les cases à cocher.
+**2. URLs de listes** *(secondaire)* — Ajouter des URLs depuis le Web UI (port 1974, carte **SOURCES**). Les URLs pointent vers des listes texte accessibles en ligne. La configuration est persistée dans `data/sources.json`.
 
-La configuration est persistée dans `data/sources.json` (volume Docker).
+> ℹ️ Si vous ajoutez de nouveaux fichiers `.txt` après le démarrage, redémarrez le conteneur pour les prendre en compte.
 
-### Formats supportés
-
-ProxySpin détecte automatiquement le format :
-- **JSON** (liste d'objets avec `ip`, `port`, `anonymity`…) — filtre `elite` / `anonymous`
-- **Texte brut** (une entrée par ligne) — `socks4://ip:port`, `socks5://ip:port`
-
-> Les entrées HTTP/HTTPS sont ignorées automatiquement.
-
-## Filtre par pays (modes proxy et local)
+## Filtre par pays (mode local)
 
 Le pool peut être restreint à un pays spécifique. Le pool complet est **conservé en mémoire** — changer de pays est instantané, sans re-fetch réseau.
 
@@ -177,30 +170,21 @@ Le pool peut être restreint à un pays spécifique. Le pool complet est **conse
 
 > ℹ️ Non disponible en mode **Tor** : les circuits Tor choisissent leur nœud de sortie automatiquement.
 
-## Mode proxies locaux
-
-Déposer des fichiers `.txt` dans le dossier `data/` (un proxy par ligne) et sélectionner `MODE=local`.
-
-Formats acceptés : `socks4://ip:port`, `socks5://ip:port`. Les entrées HTTP/HTTPS sont ignorées.
-
-> ℹ️ Si vous ajoutez de nouveaux fichiers `.txt` après le démarrage, redémarrez le conteneur pour les prendre en compte.
-
 ## Interface web (port 1974)
 
-- Basculer entre les modes **Tor**, **Free Proxy** et **Local** à chaud
+- Basculer entre les modes **Tor** et **Local** à chaud
 - Activer/désactiver la rotation automatique et modifier l'intervalle
 - Forcer un changement d'IP immédiat
-- Filtrer les proxies par pays (modes proxy/local)
+- Filtrer les proxies par pays (mode local)
 - Visualiser les backends actifs avec pays et drapeau
-- Gérer les sources de proxies
+- Gérer les URLs de sources SOCKS (optionnel)
 
 ## Extension navigateur (Tampermonkey)
 
 Le fichier `userscript.user.js` ajoute un panneau flottant sur toutes les pages :
 
-- IP de sortie actuelle avec drapeau du pays
-- Mode actif (**🧅 Tor**, **🌐 Free Proxy** ou **📂 Local**)
-- Menu déroulant de sélection du pays (modes proxy/local)
+- Mode actif (**🧅 Tor** ou **📂 Local**)
+- Menu déroulant de sélection du pays (mode local)
 - Bouton **Nouvelle IP** avec cooldown
 - Paramètres via ⚙ : hôte Docker, port API, identifiant et mot de passe
 

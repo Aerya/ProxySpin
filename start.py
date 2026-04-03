@@ -2,7 +2,7 @@
 """
 ProxySpin — Orchestrateur
 Gère Tor, Privoxy et HAProxy pour un proxy HTTP rotatif anonymisant.
-Supporte deux modes : Tor (circuits chiffrés) et Free Proxy (proxifly).
+Supporte deux modes : Tor (circuits chiffrés) et Local (proxies SOCKS privés).
 """
 
 import base64
@@ -62,7 +62,7 @@ config = {
     'rotation_interval': int(os.environ.get('ROTATION_INTERVAL', '60')),
     'auto_rotation':     os.environ.get('AUTO_ROTATION', 'true' if os.environ.get('MODE', 'tor') == 'tor' else 'false').lower() == 'true',
     'tor_instances':     int(os.environ.get('tors',          '10')),
-    'max_free_proxies':  int(os.environ.get('MAX_PROXIES',   '20')),
+    'max_proxies':       int(os.environ.get('MAX_PROXIES',   '20')),
     'country_filter':    (os.environ.get('COUNTRY_FILTER') or '').upper() or None,
 }
 config_lock = threading.Lock()
@@ -563,34 +563,24 @@ def geolocate_missing(proxies):
         if i + 100 < len(targets):
             time.sleep(1.5)   # ~40 req/min, dans la limite gratuite
 
+
 # ─── SourceManager ────────────────────────────────────────────────────────────
 
 class SourceManager:
+    """Gère les URLs de listes SOCKS personnalisées (proxies privés/payants)."""
     FILE_PATH = os.environ.get('SOURCES_FILE', '/data/sources.json')
-    DEFAULTS = [
-        {
-            'url':     'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.json',
-            'label':   'proxifly socks4',
-            'enabled': True,
-        },
-        {
-            'url':     'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.json',
-            'label':   'proxifly socks5',
-            'enabled': True,
-        },
-    ]
     _lock = threading.RLock()
 
     def load(self):
         with self._lock:
             if not os.path.exists(self.FILE_PATH):
-                return [dict(s) for s in self.DEFAULTS]
+                return []
             try:
                 with open(self.FILE_PATH) as f:
                     return json.load(f)
             except Exception as e:
-                logger.warning(f'SourceManager: lecture échouée ({e}) — sources par défaut utilisées')
-                return [dict(s) for s in self.DEFAULTS]
+                logger.warning(f'SourceManager: lecture échouée ({e})')
+                return []
 
     def _save(self, sources):
         ensure_dirs(os.path.dirname(self.FILE_PATH))
@@ -697,152 +687,6 @@ def _test_proxy(proxy, timeout):
     return False
 
 
-# ─── FreeProxyFetcher ─────────────────────────────────────────────────────────
-
-class FreeProxyFetcher:
-    ALLOWED_ANONYMITY = {'elite', 'anonymous'}
-    TEST_URL     = 'http://icanhazip.com'
-    TEST_TIMEOUT = 8
-    MAX_THREADS  = 15
-
-    def fetch_working(self, max_count, on_found=None):
-        logger.info('FreeProxy: récupération des listes…')
-        candidates = self._fetch_all()
-        logger.info(f'FreeProxy: {len(candidates)} candidats — test ({self.MAX_THREADS} threads)…')
-
-        working  = []
-        lock     = threading.Lock()
-        work_q   = queue.Queue()
-        for p in candidates:
-            work_q.put(p)
-
-        def worker():
-            while True:
-                with lock:
-                    if len(working) >= max_count:
-                        return
-                try:
-                    proxy = work_q.get(timeout=1)
-                except queue.Empty:
-                    return
-                if self._test(proxy):
-                    with lock:
-                        if len(working) < max_count:
-                            working.append(proxy)
-                            logger.info(
-                                f"FreeProxy ✓ {proxy['ip']}:{proxy['port']}"
-                                f" ({proxy['protocol']}, score:{proxy['score']})"
-                            )
-                            if on_found:
-                                on_found(proxy)
-
-        threads = [threading.Thread(target=worker, daemon=True) for _ in range(self.MAX_THREADS)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        geolocate_missing(working)
-        logger.info(f'FreeProxy: {len(working)}/{max_count} proxies retenus')
-        return working
-
-    def _fetch_all(self):
-        proxies = []
-        sources = [s for s in SourceManager().load() if s.get('enabled', True)]
-        if not sources:
-            logger.warning('FreeProxy: aucune source activée')
-            return proxies
-        for source in sources:
-            url   = source['url']
-            label = source.get('label') or url
-            try:
-                with urlopen(url, timeout=15) as r:
-                    content = r.read().decode('utf-8', errors='ignore')
-                parsed = self._parse_source(content, url)
-                logger.info(f'FreeProxy: {len(parsed)} entrées depuis {label}')
-                proxies.extend(parsed)
-            except Exception as e:
-                logger.warning(f'FreeProxy: fetch échoué ({label}) — {e}')
-        proxies.sort(key=lambda p: (-p['score'], random.random()))
-        return proxies
-
-    def _parse_source(self, content, url=''):
-        """Détecte le format (JSON proxifly / texte brut ip:port) et parse les proxies."""
-        try:
-            data = json.loads(content)
-            if isinstance(data, list):
-                return self._parse_json_list(data, url)
-        except (json.JSONDecodeError, ValueError):
-            pass
-        return self._parse_plaintext(content)
-
-    def _parse_json_list(self, data, url=''):
-        results = []
-        protocol_hint = self._protocol_from_url(url)
-        for item in data:
-            if not isinstance(item, dict) or 'ip' not in item:
-                continue
-            anon = item.get('anonymity')
-            if anon is not None and anon not in self.ALLOWED_ANONYMITY:
-                continue
-            protocol = item.get('protocol') or protocol_hint
-            if protocol not in ('socks4', 'socks5'):
-                continue  # proxies HTTP ignorés — ne supportent pas CONNECT/HTTPS
-            try:
-                geo          = item.get('geolocation') or {}
-                country_code = geo.get('countryCode') or geo.get('country_code') or None
-                country_name = geo.get('country') or country_code
-                results.append({
-                    'ip':           item['ip'],
-                    'port':         int(item['port']),
-                    'protocol':     protocol,
-                    'score':        float(item.get('score', 0)),
-                    'country_code': country_code,
-                    'country_name': country_name,
-                })
-            except (ValueError, KeyError):
-                continue
-        return results
-
-    def _parse_plaintext(self, content):
-        results = []
-        for raw in content.splitlines():
-            line = raw.strip()
-            if not line or line.startswith('#'):
-                continue
-            parsed = self._parse_line(line)
-            if parsed:
-                results.append(parsed)
-        return results
-
-    def _parse_line(self, line):
-        if '://' in line:
-            protocol, rest = line.split('://', 1)
-            protocol = protocol.lower().strip()
-        else:
-            protocol = 'http'
-            rest = line
-        parts = rest.rsplit(':', 1)
-        if len(parts) != 2:
-            return None
-        ip, port_str = parts[0].strip(), parts[1].strip()
-        try:
-            port = int(port_str)
-        except ValueError:
-            return None
-        if protocol not in ('socks4', 'socks5'):
-            return None  # proxies HTTP ignorés — ne supportent pas CONNECT/HTTPS
-        return {'ip': ip, 'port': port, 'protocol': protocol, 'score': 0, 'country_code': None, 'country_name': None}
-
-    def _protocol_from_url(self, url):
-        url_lower = url.lower()
-        for p in ('socks5', 'socks4', 'https'):
-            if p in url_lower:
-                return p
-        return 'http'
-
-    def _test(self, proxy):
-        return _test_proxy(proxy, self.TEST_TIMEOUT)
 
 # ─── LocalProxyLoader ────────────────────────────────────────────────────────
 
@@ -892,31 +736,61 @@ class LocalProxyLoader:
         return working
 
     def _read_all_files(self):
-        if not os.path.isdir(self.DATA_DIR):
-            logger.warning(f'LocalProxy: dossier introuvable : {self.DATA_DIR}')
-            return []
-        txt_files = sorted(
-            f for f in os.listdir(self.DATA_DIR)
-            if f.lower().endswith('.txt')
-        )
-        if not txt_files:
-            logger.warning(f'LocalProxy: aucun fichier .txt dans {self.DATA_DIR}')
-            return []
         proxies = []
-        seen = set()
-        for filename in txt_files:
-            filepath = os.path.join(self.DATA_DIR, filename)
-            file_proxies = self._read_file(filepath)
-            before = len(proxies)
-            for p in file_proxies:
-                key = (p['ip'], p['port'], p['protocol'])
-                if key not in seen:
-                    seen.add(key)
-                    proxies.append(p)
-            added = len(proxies) - before
-            logger.info(f'LocalProxy: {added} proxies chargés depuis {filename} ({len(file_proxies) - added} doublons ignorés)')
-        logger.info(f'LocalProxy: {len(proxies)} proxies uniques au total ({len(txt_files)} fichier(s))')
+        seen    = set()
+
+        def _add(p):
+            key = (p['ip'], p['port'], p['protocol'])
+            if key not in seen:
+                seen.add(key)
+                proxies.append(p)
+
+        # 1. Fichiers .txt locaux
+        if os.path.isdir(self.DATA_DIR):
+            txt_files = sorted(f for f in os.listdir(self.DATA_DIR) if f.lower().endswith('.txt'))
+            for filename in txt_files:
+                filepath = os.path.join(self.DATA_DIR, filename)
+                file_proxies = self._read_file(filepath)
+                before = len(proxies)
+                for p in file_proxies:
+                    _add(p)
+                added = len(proxies) - before
+                logger.info(f'LocalProxy: {added} proxies depuis {filename} ({len(file_proxies) - added} doublons ignorés)')
+
+        # 2. URLs de sources configurées (optionnel — proxies SOCKS privés/payants)
+        sources = [s for s in SourceManager().load() if s.get('enabled', True)]
+        for source in sources:
+            url   = source['url']
+            label = source.get('label') or url
+            try:
+                with urlopen(url, timeout=15) as r:
+                    content = r.read().decode('utf-8', errors='ignore')
+                url_proxies = self._parse_url_content(content)
+                before = len(proxies)
+                for p in url_proxies:
+                    _add(p)
+                added = len(proxies) - before
+                logger.info(f'LocalProxy: {added} proxies depuis {label} ({len(url_proxies) - added} doublons ignorés)')
+            except Exception as e:
+                logger.warning(f'LocalProxy: fetch échoué ({label}) — {e}')
+
+        if not proxies:
+            logger.warning('LocalProxy: aucun proxy trouvé (aucun fichier .txt ni source configurée)')
+        else:
+            logger.info(f'LocalProxy: {len(proxies)} proxies uniques au total')
         return proxies
+
+    def _parse_url_content(self, content):
+        """Parse le contenu d'une URL (texte brut ip:port par ligne)."""
+        results = []
+        for raw in content.splitlines():
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            parsed = self._parse_line(line)
+            if parsed:
+                results.append(parsed)
+        return results
 
     def _read_file(self, filepath):
         proxies = []
@@ -984,21 +858,16 @@ class ProxyManager:
                 for p in self._proxies:
                     p.tor.rotate()
                 self._last_rotation = time.time()
-                # Resonde les IPs de sortie après le changement de circuit (~15s pour bootstrap)
                 threading.Thread(target=self._probe_tor_backends, args=(15,), daemon=True).start()
                 return {'ok': True, 'mode': 'tor', 'message': f"rotate envoyé ({len(self._proxies)} circuits)"}
-            elif self.mode == 'proxy':
-                n = self._rotate_free_proxies()
-                self._last_rotation = time.time()
-                return {'ok': True, 'mode': 'proxy', 'message': f"{n} proxies actualisés"}
             else:
                 n = self._reload_local_proxies()
                 self._last_rotation = time.time()
-                return {'ok': True, 'mode': 'local', 'message': f"{n} proxies locaux rechargés"}
+                return {'ok': True, 'mode': 'local', 'message': f"{n} proxies rechargés"}
 
     def switch_mode(self, new_mode):
-        if new_mode not in ('tor', 'proxy', 'local'):
-            return {'ok': False, 'error': 'Mode invalide (tor | proxy)'}
+        if new_mode not in ('tor', 'local'):
+            return {'ok': False, 'error': 'Mode invalide (tor | local)'}
         with self._lock:
             if new_mode == self.mode:
                 return {'ok': False, 'message': f"Déjà en mode '{new_mode}'"}
@@ -1007,7 +876,6 @@ class ProxyManager:
             self.haproxy.backends.clear()
             with config_lock:
                 config['mode'] = new_mode
-                # Auto-rotation : activée par défaut pour Tor, désactivée pour les proxies
                 if 'AUTO_ROTATION' not in os.environ:
                     config['auto_rotation'] = (new_mode == 'tor')
             self._launch_backends()
@@ -1077,7 +945,7 @@ class ProxyManager:
         with config_lock:
             config['country_filter'] = code
         with self._lock:
-            if self._all_working and self.mode in ('proxy', 'local'):
+            if self._all_working and self.mode == 'local':
                 self._apply_country_filter()
                 return {'ok': True, 'country': code, 'instances': len(self._proxies)}
         return {'ok': True, 'country': code, 'message': 'appliqué à la prochaine rotation'}
@@ -1096,7 +964,7 @@ class ProxyManager:
         self._stop_backends()
         self.haproxy.backends.clear()
         filtered = self._filter_by_country(self._all_working, config.get('country_filter'))
-        for i, up in enumerate(filtered[:config['max_free_proxies']]):
+        for i, up in enumerate(filtered[:config['max_proxies']]):
             fp = FreeProxy(i, up)
             fp.start()
             self.haproxy.add_backend(fp)
@@ -1123,8 +991,6 @@ class ProxyManager:
     def _launch_backends(self):
         if self.mode == 'tor':
             self._start_tor_backends()
-        elif self.mode == 'proxy':
-            self._rotate_free_proxies()
         else:
             self._reload_local_proxies()
 
@@ -1179,7 +1045,7 @@ class ProxyManager:
         """Retourne un callback thread-safe qui démarre chaque proxy dès qu'il est validé."""
         stream_lock = threading.Lock()
         idx = [0]
-        max_p = config['max_free_proxies']
+        max_p = config['max_proxies']
 
         def on_found(proxy):
             with stream_lock:
@@ -1199,42 +1065,17 @@ class ProxyManager:
     def _reload_local_proxies(self):
         country = config.get('country_filter')
         self._loading     = True
-        self._loading_msg = f"Chargement et test des proxies locaux (dossier {LocalProxyLoader.DATA_DIR})…"
+        self._loading_msg = f"Chargement et test des proxies SOCKS (dossier {LocalProxyLoader.DATA_DIR})…"
         try:
-            max_fetch = config['max_free_proxies'] * (5 if country else 1)
+            max_fetch = config['max_proxies'] * (5 if country else 1)
             self._stop_backends()
             self.haproxy.backends.clear()
-            # Sans filtre pays : démarrage immédiat dès qu'un proxy passe le test
             on_found = None if country else self._make_stream_callback()
             upstream_list     = LocalProxyLoader().load_working(max_fetch, on_found=on_found)
             self._all_working = upstream_list
             if country:
                 filtered = self._filter_by_country(upstream_list, country)
-                for i, up in enumerate(filtered[:config['max_free_proxies']]):
-                    fp = FreeProxy(i, up)
-                    fp.start()
-                    self.haproxy.add_backend(fp)
-                    self._proxies.append(fp)
-                self.haproxy.soft_reload()
-            return len(self._proxies)
-        finally:
-            self._loading     = False
-            self._loading_msg = None
-
-    def _rotate_free_proxies(self):
-        country = config.get('country_filter')
-        self._loading     = True
-        self._loading_msg = f"Récupération et test des proxies (max {config['max_free_proxies']})…"
-        try:
-            max_fetch = config['max_free_proxies'] * (5 if country else 1)
-            self._stop_backends()
-            self.haproxy.backends.clear()
-            on_found = None if country else self._make_stream_callback()
-            upstream_list     = FreeProxyFetcher().fetch_working(max_fetch, on_found=on_found)
-            self._all_working = upstream_list
-            if country:
-                filtered = self._filter_by_country(upstream_list, country)
-                for i, up in enumerate(filtered[:config['max_free_proxies']]):
+                for i, up in enumerate(filtered[:config['max_proxies']]):
                     fp = FreeProxy(i, up)
                     fp.start()
                     self.haproxy.add_backend(fp)
@@ -1331,7 +1172,6 @@ WEB_UI_HTML = """<!DOCTYPE html>
         <label id="lbl-mode-field"></label>
         <select id="sel-mode">
           <option value="tor">&#x1F9C5; Tor</option>
-          <option value="proxy" id="opt-proxy"></option>
           <option value="local" id="opt-local"></option>
         </select>
       </div>
@@ -1391,8 +1231,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         all_countries:  '🌍 Tous',
         config_card:    'CONFIGURATION',
         lbl_mode_field: 'Mode',
-        opt_proxy:      '🌐 Proxies gratuits (proxifly)',
-        opt_local:      '📂 Proxies locaux (fichier)',
+        opt_local:      '📂 Proxies SOCKS locaux',
         lbl_autorot_f:  'Rotation automatique',
         lbl_autorot_c:  'Activ\u00e9e',
         lbl_interval_f: 'Intervalle de rotation (secondes)',
@@ -1406,8 +1245,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
         probing:        'Sondage en cours\u2026',
         loading:        'Chargement\u2026',
         no_backend:     'Aucun backend actif',
-        sources_card:   'SOURCES DE PROXIES',
-        sources_mode:   '(mode proxy)',
+        sources_card:   'SOURCES SOCKS',
+        sources_mode:   '(mode local)',
         th_on:          'On',
         th_label:       'Label',
         src_url_lbl:    'URL de la source',
@@ -1437,8 +1276,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         all_countries:  '🌍 All',
         config_card:    'CONFIGURATION',
         lbl_mode_field: 'Mode',
-        opt_proxy:      '🌐 Free proxies (proxifly)',
-        opt_local:      '📂 Local proxies (file)',
+        opt_local:      '📂 Local SOCKS proxies',
         lbl_autorot_f:  'Automatic rotation',
         lbl_autorot_c:  'Enabled',
         lbl_interval_f: 'Rotation interval (seconds)',
@@ -1452,8 +1290,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
         probing:        'Probing\u2026',
         loading:        'Loading\u2026',
         no_backend:     'No active backend',
-        sources_card:   'PROXY SOURCES',
-        sources_mode:   '(proxy mode)',
+        sources_card:   'SOCKS SOURCES',
+        sources_mode:   '(local mode)',
         th_on:          'On',
         th_label:       'Label',
         src_url_lbl:    'Source URL',
@@ -1486,7 +1324,6 @@ WEB_UI_HTML = """<!DOCTYPE html>
       document.getElementById('lbl-country-filter').textContent = t('lbl_country');
       document.getElementById('lbl-config-card').textContent    = t('config_card');
       document.getElementById('lbl-mode-field').textContent     = t('lbl_mode_field');
-      document.getElementById('opt-proxy').textContent          = t('opt_proxy');
       document.getElementById('opt-local').textContent          = t('opt_local');
       document.getElementById('lbl-autorot-field').textContent  = t('lbl_autorot_f');
       document.getElementById('lbl-autorot-check').textContent  = t('lbl_autorot_c');
@@ -1570,11 +1407,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
       if (s.mode === 'tor') {
         modeBadge.textContent = '🧅 Tor';
         modeBadge.className = 'badge badge-tor';
-      } else if (s.mode === 'local') {
-        modeBadge.textContent = '📂 Local';
-        modeBadge.className = 'badge badge-proxy';
       } else {
-        modeBadge.textContent = '🌐 Free Proxy';
+        modeBadge.textContent = '📂 Local';
         modeBadge.className = 'badge badge-proxy';
       }
 
@@ -1764,7 +1598,7 @@ class APIHandler(BaseHTTPRequestHandler):
         elif path == '/api/backends':
             self._json({'backends': self.manager.backends_info})
         elif path == '/api/sources':
-            self._json({'sources': SourceManager().load()})
+            self._json({'sources': SourceManager().load()})  # listes SOCKS personnalisées
         elif path == '/api/countries':
             self._json({'countries': self.manager.available_countries()})
         else:
@@ -1791,7 +1625,7 @@ class APIHandler(BaseHTTPRequestHandler):
         elif path == '/api/sources/remove':
             self._json(SourceManager().remove(params.get('url', '')))
         elif path == '/api/sources/toggle':
-            self._json(SourceManager().toggle(params.get('url', ''), params.get('enabled', True)))
+            self._json(SourceManager().toggle(params.get('url', ''), params.get('enabled', True)))  # noqa
         elif path == '/api/country':
             self._json(self.manager.set_country(params.get('country', '')))
         else:
