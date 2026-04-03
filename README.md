@@ -72,9 +72,7 @@ Toutes les options sont des variables d'environnement dans `docker-compose.yml` 
 
 | Variable | Défaut | Description |
 |----------|--------|-------------|
-| `MODE` | `tor` | Mode au démarrage : `tor`, `proxy` ou `local` |
-| `AUTO_ROTATION` | `true` (mode `tor`) / `false` (modes `proxy` et `local`) | Rotation automatique activée au démarrage |
-| `ROTATION_INTERVAL` | `60` | Intervalle de rotation en secondes au démarrage |
+| `ROTATION_INTERVAL` | `60` | Intervalle de rotation Tor en secondes |
 | `tors` | `10` | Nombre d'instances Tor parallèles (mode `tor`) |
 | `MAX_PROXIES` | `20` | Nombre de proxies actifs dans HAProxy (modes `proxy` et `local`) |
 | `COUNTRY_FILTER` | — | Filtre pays au démarrage, code ISO 2 lettres (ex. `FR`, `DE`) |
@@ -100,10 +98,8 @@ Quand une auth est désactivée, les variables `PROXY_USER`/`PROXY_PASS` ou `STA
 
 ### Détail des variables
 
-**`MODE` / `AUTO_ROTATION` / `ROTATION_INTERVAL`**
-Ces trois variables définissent l'état **au démarrage du conteneur**. Une fois lancé, tout peut être modifié à chaud depuis le web UI (port 1974) ou le userscript — sans redémarrer. Ces changements en live sont perdus si le conteneur redémarre ; pour un comportement persistant, fixez-le dans `docker-compose.yml`.
-
-La rotation automatique est **activée par défaut en mode `tor`** (renouvellement des circuits toutes les 60 secondes) et **désactivée par défaut en modes `proxy` et `local`** — les proxies libres sont moins stables, une rotation trop fréquente peut couper des connexions en cours. Elle peut être activée manuellement depuis le Web UI. Changer de mode depuis le Web UI ajuste automatiquement ce comportement (sauf si `AUTO_ROTATION` est explicitement défini dans `docker-compose.yml`).
+**`ROTATION_INTERVAL`**
+Intervalle en secondes entre deux renouvellements automatiques de circuits Tor. La rotation automatique est **active uniquement en mode Tor** et se désactive automatiquement en modes `proxy` et `local`. Elle peut être activée/désactivée manuellement depuis le Web UI à tout moment.
 
 **`tors`**
 En mode `tor`, ProxySpin démarre N processus Tor complètement indépendants. Chacun construit son propre circuit chiffré à 3 nœuds et possède sa propre IP de sortie. HAProxy répartit les requêtes entre ces N instances. Avec `tors=10`, vous avez 10 IPs de sortie différentes disponibles simultanément.

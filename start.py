@@ -705,7 +705,7 @@ class FreeProxyFetcher:
     TEST_TIMEOUT = 8
     MAX_THREADS  = 15
 
-    def fetch_working(self, max_count):
+    def fetch_working(self, max_count, on_found=None):
         logger.info('FreeProxy: récupération des listes…')
         candidates = self._fetch_all()
         logger.info(f'FreeProxy: {len(candidates)} candidats — test ({self.MAX_THREADS} threads)…')
@@ -733,6 +733,8 @@ class FreeProxyFetcher:
                                 f"FreeProxy ✓ {proxy['ip']}:{proxy['port']}"
                                 f" ({proxy['protocol']}, score:{proxy['score']})"
                             )
+                            if on_found:
+                                on_found(proxy)
 
         threads = [threading.Thread(target=worker, daemon=True) for _ in range(self.MAX_THREADS)]
         for t in threads:
@@ -850,7 +852,7 @@ class LocalProxyLoader:
     TEST_TIMEOUT = 8
     MAX_THREADS  = 15
 
-    def load_working(self, max_count):
+    def load_working(self, max_count, on_found=None):
         raw = self._read_all_files()
         if not raw:
             return []
@@ -876,6 +878,8 @@ class LocalProxyLoader:
                         if len(working) < max_count:
                             working.append(proxy)
                             logger.info(f"LocalProxy ✓ {proxy['ip']}:{proxy['port']} ({proxy['protocol']})")
+                            if on_found:
+                                on_found(proxy)
 
         threads = [threading.Thread(target=worker, daemon=True) for _ in range(self.MAX_THREADS)]
         for t in threads:
@@ -1171,24 +1175,47 @@ class ProxyManager:
                 pass
         self._proxies.clear()
 
+    def _make_stream_callback(self):
+        """Retourne un callback thread-safe qui démarre chaque proxy dès qu'il est validé."""
+        stream_lock = threading.Lock()
+        idx = [0]
+        max_p = config['max_free_proxies']
+
+        def on_found(proxy):
+            with stream_lock:
+                if idx[0] >= max_p:
+                    return
+                i = idx[0]
+                idx[0] += 1
+            fp = FreeProxy(i, proxy)
+            fp.start()
+            with stream_lock:
+                self.haproxy.add_backend(fp)
+                self._proxies.append(fp)
+                self.haproxy.soft_reload()
+
+        return on_found
+
     def _reload_local_proxies(self):
         country = config.get('country_filter')
         self._loading     = True
         self._loading_msg = f"Chargement et test des proxies locaux (dossier {LocalProxyLoader.DATA_DIR})…"
         try:
-            # Charge plus de candidats si un filtre pays est actif
             max_fetch = config['max_free_proxies'] * (5 if country else 1)
-            upstream_list     = LocalProxyLoader().load_working(max_fetch)
-            self._all_working = upstream_list
             self._stop_backends()
             self.haproxy.backends.clear()
-            filtered = self._filter_by_country(upstream_list, country)
-            for i, up in enumerate(filtered[:config['max_free_proxies']]):
-                fp = FreeProxy(i, up)
-                fp.start()
-                self.haproxy.add_backend(fp)
-                self._proxies.append(fp)
-            self.haproxy.soft_reload()
+            # Sans filtre pays : démarrage immédiat dès qu'un proxy passe le test
+            on_found = None if country else self._make_stream_callback()
+            upstream_list     = LocalProxyLoader().load_working(max_fetch, on_found=on_found)
+            self._all_working = upstream_list
+            if country:
+                filtered = self._filter_by_country(upstream_list, country)
+                for i, up in enumerate(filtered[:config['max_free_proxies']]):
+                    fp = FreeProxy(i, up)
+                    fp.start()
+                    self.haproxy.add_backend(fp)
+                    self._proxies.append(fp)
+                self.haproxy.soft_reload()
             return len(self._proxies)
         finally:
             self._loading     = False
@@ -1199,19 +1226,20 @@ class ProxyManager:
         self._loading     = True
         self._loading_msg = f"Récupération et test des proxies (max {config['max_free_proxies']})…"
         try:
-            # Charge plus de candidats si un filtre pays est actif
             max_fetch = config['max_free_proxies'] * (5 if country else 1)
-            upstream_list     = FreeProxyFetcher().fetch_working(max_fetch)
-            self._all_working = upstream_list
             self._stop_backends()
             self.haproxy.backends.clear()
-            filtered = self._filter_by_country(upstream_list, country)
-            for i, up in enumerate(filtered[:config['max_free_proxies']]):
-                fp = FreeProxy(i, up)
-                fp.start()
-                self.haproxy.add_backend(fp)
-                self._proxies.append(fp)
-            self.haproxy.soft_reload()
+            on_found = None if country else self._make_stream_callback()
+            upstream_list     = FreeProxyFetcher().fetch_working(max_fetch, on_found=on_found)
+            self._all_working = upstream_list
+            if country:
+                filtered = self._filter_by_country(upstream_list, country)
+                for i, up in enumerate(filtered[:config['max_free_proxies']]):
+                    fp = FreeProxy(i, up)
+                    fp.start()
+                    self.haproxy.add_backend(fp)
+                    self._proxies.append(fp)
+                self.haproxy.soft_reload()
             return len(self._proxies)
         finally:
             self._loading     = False

@@ -8,10 +8,7 @@ services:
       - 1974:1974 # Web UI + API de contrôle
       # - 1976:1976 # HAProxy stats (désactivé par défaut — décommenter pour activer)
     environment:
-      # ── Mode : 'tor' ou 'proxy' (proxies gratuits) ──
-      - MODE=tor
-      # ── Rotation ──
-      - AUTO_ROTATION=true
+      # ── Rotation (Tor uniquement — désactivée automatiquement en mode proxy/local) ──
       - ROTATION_INTERVAL=60 # secondes
       # ── Tor ──
       - tors=10 # nombre d'instances Tor
