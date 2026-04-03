@@ -373,7 +373,6 @@
       el('rp-instances').textContent = '—';
       el('rp-btn-rotate').disabled   = true;
     }
-  }    }
   }
 
   // ─── Filtre pays ──────────────────────────────────────────────────────────
