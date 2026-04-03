@@ -11,7 +11,7 @@ Proxy HTTP rotatif anonymisant basé sur Tor et des proxies gratuits, avec inter
 ProxySpin expose **un point d'entrée unique** (port 1973) derrière lequel chaque requête peut sortir avec une IP différente. Il supporte trois modes :
 
 - **Tor** : N instances Tor indépendantes, chacune avec son propre circuit chiffré à 3 nœuds relais
-- **Free Proxy** : proxies HTTP/SOCKS gratuits récupérés automatiquement depuis des sources configurables (proxifly par défaut), filtrés pour ne garder que les proxies `elite` ou `anonymous`
+- **Free Proxy** : proxies **SOCKS4/SOCKS5** gratuits récupérés automatiquement depuis des sources configurables (proxifly par défaut), filtrés pour ne garder que les proxies `elite` ou `anonymous`
 - **Local** : liste de proxies fournie manuellement dans un fichier texte
 
 ## Architecture
@@ -149,7 +149,9 @@ En mode `proxy`, ProxySpin interroge une liste de sources configurable depuis le
 
 ### Sources par défaut
 
-Les quatre listes [proxifly](https://github.com/proxifly/free-proxy-list) sont pré-chargées (http, https, socks4, socks5) et actives par défaut — aucune configuration nécessaire.
+Les listes [proxifly](https://github.com/proxifly/free-proxy-list) **socks4** et **socks5** sont pré-chargées et actives par défaut — aucune configuration nécessaire.
+
+> ⚠️ **Pourquoi uniquement SOCKS ?** Les proxies HTTP gratuits ne supportent pas `CONNECT`, ce qui est indispensable pour le trafic HTTPS (quasi-totalité du web). Sans `CONNECT`, le navigateur bascule en connexion directe et expose l'IP réelle. Seuls les proxies SOCKS tunnelisent nativement HTTP et HTTPS.
 
 ### Gestion des sources
 
@@ -165,7 +167,9 @@ La configuration est persistée dans `data/sources.json` (volume Docker).
 
 ProxySpin détecte automatiquement le format :
 - **JSON** (liste d'objets avec `ip`, `port`, `anonymity`…) — filtre `elite` / `anonymous`
-- **Texte brut** (une entrée par ligne) — `ip:port`, `http://ip:port`, `socks5://ip:port`…
+- **Texte brut** (une entrée par ligne) — `socks4://ip:port`, `socks5://ip:port`
+
+> Les entrées HTTP/HTTPS sont ignorées automatiquement.
 
 ## Filtre par pays (modes proxy et local)
 
@@ -181,7 +185,7 @@ Le pool peut être restreint à un pays spécifique. Le pool complet est **conse
 
 Déposer des fichiers `.txt` dans le dossier `data/` (un proxy par ligne) et sélectionner `MODE=local`.
 
-Formats acceptés : `ip:port`, `http://ip:port`, `https://ip:port`, `socks4://ip:port`, `socks5://ip:port`.
+Formats acceptés : `socks4://ip:port`, `socks5://ip:port`. Les entrées HTTP/HTTPS sont ignorées.
 
 > ℹ️ Si vous ajoutez de nouveaux fichiers `.txt` après le démarrage, redémarrez le conteneur pour les prendre en compte.
 

@@ -11,7 +11,7 @@ Anonymizing rotating HTTP proxy based on Tor and free proxies, with a web contro
 ProxySpin exposes a **single entry point** (port 1973) behind which each request can exit with a different IP address. It supports three modes:
 
 - **Tor**: N independent Tor instances, each with its own 3-relay encrypted circuit
-- **Free Proxy**: HTTP/SOCKS free proxies fetched automatically from configurable sources (proxifly by default), filtered to keep only `elite` or `anonymous` proxies
+- **Free Proxy**: **SOCKS4/SOCKS5** free proxies fetched automatically from configurable sources (proxifly by default), filtered to keep only `elite` or `anonymous` proxies
 - **Local**: a manually maintained proxy list provided as a text file
 
 ## Architecture
@@ -149,7 +149,9 @@ In `proxy` mode, ProxySpin fetches from a configurable source list managed from 
 
 ### Default sources
 
-The four [proxifly](https://github.com/proxifly/free-proxy-list) lists are pre-loaded (http, https, socks4, socks5) and active by default — no configuration needed.
+The [proxifly](https://github.com/proxifly/free-proxy-list) **socks4** and **socks5** lists are pre-loaded and active by default — no configuration needed.
+
+> ⚠️ **Why SOCKS only?** Free HTTP proxies do not support `CONNECT`, which is required for HTTPS traffic (virtually the entire modern web). Without `CONNECT`, the browser falls back to a direct connection and leaks the real IP. Only SOCKS proxies natively tunnel both HTTP and HTTPS.
 
 ### Managing sources
 
@@ -165,7 +167,9 @@ The configuration is persisted in `data/sources.json` (Docker volume).
 
 ProxySpin auto-detects the format:
 - **JSON** (list of objects with `ip`, `port`, `anonymity`…) — filtered to `elite` / `anonymous`
-- **Plain text** (one entry per line) — `ip:port`, `http://ip:port`, `socks5://ip:port`…
+- **Plain text** (one entry per line) — `socks4://ip:port`, `socks5://ip:port`
+
+> HTTP/HTTPS entries are silently ignored.
 
 ## Country filter (proxy and local modes)
 
@@ -181,7 +185,7 @@ The proxy pool can be restricted to a specific country. The full pool is **kept 
 
 Drop `.txt` files into the `data/` folder (one proxy per line) and set `MODE=local`.
 
-Accepted formats: `ip:port`, `http://ip:port`, `https://ip:port`, `socks4://ip:port`, `socks5://ip:port`.
+Accepted formats: `socks4://ip:port`, `socks5://ip:port`. HTTP/HTTPS entries are ignored.
 
 > ℹ️ If you add new `.txt` files after startup, restart the container for them to be picked up.
 

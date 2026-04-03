@@ -439,11 +439,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_CONNECT(self):
         if not self._auth_ok():
             return
+        def _abort():
+            """Coupe la connexion client brutalement pour éviter tout fallback direct."""
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+
         try:
             backend = socket.create_connection(('127.0.0.1', HAPROXY_PORT), timeout=30)
         except Exception as e:
             logger.warning('CONNECT: backend unreachable: %s' % e)
-            self.close_connection = True
+            _abort()
             return
         connect_req = ('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (self.path, self.path)).encode()
         backend.sendall(connect_req)
@@ -459,13 +466,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             backend.close()
             logger.warning('CONNECT tunnel error: %s' % e)
-            self.close_connection = True
+            _abort()
             return
         first_line = resp.split(b'\r\n')[0].decode('utf-8', errors='replace')
         if '200' not in first_line:
             backend.close()
             logger.warning('CONNECT refused by upstream: %s' % first_line)
-            self.close_connection = True
+            _abort()
             return
         self.send_response(200, 'Connection Established')
         self.end_headers()
@@ -562,16 +569,6 @@ class SourceManager:
     FILE_PATH = os.environ.get('SOURCES_FILE', '/data/sources.json')
     DEFAULTS = [
         {
-            'url':     'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.json',
-            'label':   'proxifly http',
-            'enabled': True,
-        },
-        {
-            'url':     'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.json',
-            'label':   'proxifly https',
-            'enabled': True,
-        },
-        {
             'url':     'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.json',
             'label':   'proxifly socks4',
             'enabled': True,
@@ -634,15 +631,14 @@ class SourceManager:
 
 # ─── Helpers de test proxy ────────────────────────────────────────────────────
 
-_PROBE_HOST = '1.1.1.1'
-_PROBE_PORT = 443
+_SOCKS_PROBE_HOST = '1.1.1.1'  # IP pour les handshakes SOCKS (pas de résolution DNS nécessaire)
+_SOCKS_PROBE_PORT = 443
 
 def _test_socks4(ip, port, timeout):
     """Retourne True si le proxy répond correctement au handshake SOCKS4."""
     try:
         s = socket.create_connection((ip, port), timeout=timeout)
-        # CONNECT to _PROBE_HOST:_PROBE_PORT via SOCKS4
-        req = struct.pack('!BBH', 4, 1, _PROBE_PORT) + socket.inet_aton(_PROBE_HOST) + b'\x00'
+        req = struct.pack('!BBH', 4, 1, _SOCKS_PROBE_PORT) + socket.inet_aton(_SOCKS_PROBE_HOST) + b'\x00'
         s.sendall(req)
         s.settimeout(timeout)
         resp = s.recv(8)
@@ -655,14 +651,13 @@ def _test_socks5(ip, port, timeout):
     """Retourne True si le proxy répond correctement au handshake SOCKS5."""
     try:
         s = socket.create_connection((ip, port), timeout=timeout)
-        s.sendall(b'\x05\x01\x00')  # version=5, nmethods=1, no-auth
+        s.sendall(b'\x05\x01\x00')
         s.settimeout(timeout)
         resp = s.recv(2)
         if len(resp) < 2 or resp[0] != 5 or resp[1] == 0xFF:
             s.close()
             return False
-        # CONNECT ipv4
-        req = b'\x05\x01\x00\x01' + socket.inet_aton(_PROBE_HOST) + struct.pack('!H', _PROBE_PORT)
+        req = b'\x05\x01\x00\x01' + socket.inet_aton(_SOCKS_PROBE_HOST) + struct.pack('!H', _SOCKS_PROBE_PORT)
         s.sendall(req)
         resp = s.recv(10)
         s.close()
@@ -670,37 +665,15 @@ def _test_socks5(ip, port, timeout):
     except Exception:
         return False
 
-def _test_http_connect(ip, port, timeout):
-    """Teste un proxy HTTP via CONNECT (nécessaire pour HTTPS) + GET HTTP."""
-    target = f'{_PROBE_HOST}:{_PROBE_PORT}'
-    try:
-        s = socket.create_connection((ip, port), timeout=timeout)
-        s.settimeout(timeout)
-        s.sendall(f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n'.encode())
-        resp = b''
-        while b'\r\n\r\n' not in resp:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            resp += chunk
-            if len(resp) > 4096:
-                break
-        s.close()
-        first = resp.split(b'\r\n')[0]
-        return b'200' in first
-    except Exception:
-        return False
-
 def _test_proxy(proxy, timeout):
-    """Retourne True si le proxy est fonctionnel et supporte CONNECT (HTTPS)."""
-    protocol = proxy.get('protocol', 'http')
+    """Teste le handshake SOCKS4 ou SOCKS5. Les proxies HTTP sont rejetés en amont."""
+    protocol = proxy.get('protocol', '')
     ip, port = proxy['ip'], proxy['port']
     if protocol == 'socks4':
         return _test_socks4(ip, port, timeout)
     if protocol in ('socks5', 'socks5h'):
         return _test_socks5(ip, port, timeout)
-    # HTTP / HTTPS proxy : tester CONNECT pour garantir le support HTTPS
-    return _test_http_connect(ip, port, timeout)
+    return False
 
 
 # ─── FreeProxyFetcher ─────────────────────────────────────────────────────────
@@ -790,6 +763,8 @@ class FreeProxyFetcher:
             if anon is not None and anon not in self.ALLOWED_ANONYMITY:
                 continue
             protocol = item.get('protocol') or protocol_hint
+            if protocol not in ('socks4', 'socks5'):
+                continue  # proxies HTTP ignorés — ne supportent pas CONNECT/HTTPS
             try:
                 geo          = item.get('geolocation') or {}
                 country_code = geo.get('countryCode') or geo.get('country_code') or None
@@ -832,8 +807,8 @@ class FreeProxyFetcher:
             port = int(port_str)
         except ValueError:
             return None
-        if protocol not in ('http', 'https', 'socks4', 'socks5'):
-            protocol = 'http'
+        if protocol not in ('socks4', 'socks5'):
+            return None  # proxies HTTP ignorés — ne supportent pas CONNECT/HTTPS
         return {'ip': ip, 'port': port, 'protocol': protocol, 'score': 0, 'country_code': None, 'country_name': None}
 
     def _protocol_from_url(self, url):
@@ -950,8 +925,8 @@ class LocalProxyLoader:
             port = int(port_str)
         except ValueError:
             return None
-        if protocol not in ('http', 'https', 'socks4', 'socks5'):
-            return None
+        if protocol not in ('socks4', 'socks5'):
+            return None  # proxies HTTP ignorés — ne supportent pas CONNECT/HTTPS
         return {'ip': ip.strip(), 'port': port, 'protocol': protocol, 'score': 0, 'country_code': None, 'country_name': None}
 
     def _test(self, proxy):
