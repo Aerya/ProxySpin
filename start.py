@@ -175,6 +175,8 @@ class Privoxy:
             self._forward_directive(),
             'logdir /var/log/privoxy',
             'debug 0',
+            'hide-forwarded-for-headers 1',
+            'change-x-forwarded-for block',
             'keep-alive-timeout 5',
             'default-server-timeout 60',
             'socket-timeout 60',
