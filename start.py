@@ -442,7 +442,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         try:
             backend = socket.create_connection(('127.0.0.1', HAPROXY_PORT), timeout=30)
         except Exception as e:
-            self.send_error(502, 'Backend unreachable: %s' % e)
+            logger.warning('CONNECT: backend unreachable: %s' % e)
+            self.close_connection = True
             return
         connect_req = ('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (self.path, self.path)).encode()
         backend.sendall(connect_req)
@@ -457,12 +458,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     raise ConnectionError('Reponse HAProxy trop longue')
         except Exception as e:
             backend.close()
-            self.send_error(502, str(e))
+            logger.warning('CONNECT tunnel error: %s' % e)
+            self.close_connection = True
             return
         first_line = resp.split(b'\r\n')[0].decode('utf-8', errors='replace')
         if '200' not in first_line:
             backend.close()
-            self.send_error(502, 'HAProxy a refuse CONNECT : %s' % first_line)
+            logger.warning('CONNECT refused by upstream: %s' % first_line)
+            self.close_connection = True
             return
         self.send_response(200, 'Connection Established')
         self.end_headers()
@@ -632,7 +635,7 @@ class SourceManager:
 # ─── Helpers de test proxy ────────────────────────────────────────────────────
 
 _PROBE_HOST = '1.1.1.1'
-_PROBE_PORT = 80
+_PROBE_PORT = 443
 
 def _test_socks4(ip, port, timeout):
     """Retourne True si le proxy répond correctement au handshake SOCKS4."""
