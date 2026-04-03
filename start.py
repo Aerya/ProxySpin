@@ -1627,6 +1627,17 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
     loadSources();
   </script>
+
+  <footer style="margin-top:24px;padding:16px 0 8px;border-top:1px solid #2d2d5e;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:11px;color:#555">
+    <span>&#x2B21; ProxySpin</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <a href="https://github.com/Aerya" target="_blank" style="color:#7c83fd;text-decoration:none;font-weight:500">GitHub</a>
+      <a href="https://upandclear.org/" target="_blank" style="color:#7c83fd;text-decoration:none;font-weight:500">Blog</a>
+      <span style="color:#444">Par</span>
+      <strong style="color:#7c83fd">Aerya</strong>
+      <img src="https://upandclear.org/wp-content/uploads/2024/06/Logo.detoure1.png.webp" alt="Aerya" style="width:20px;height:20px;border-radius:50%;object-fit:cover">
+    </div>
+  </footer>
 </body>
 </html>"""
 

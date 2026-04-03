@@ -2,7 +2,7 @@
 // @name         ProxySpin — Contrôleur
 // @namespace    proxyspin-controller
 // @version      3.1.0
-// @description  Affiche l'état, le mode (Tor/Proxy), l'IP de sortie et le drapeau du pays en permanence.
+// @description  Affiche le mode (Tor/Proxy), le statut et les controles du proxy.
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -161,14 +161,6 @@
     #rp-state-text { flex: 1; line-height: 1.3; }
     #rp-state-sub  { font-weight:normal; font-size:10px; opacity:.7; display:block; }
 
-    #rp-ip-row {
-      display: flex; align-items: center; gap: 8px;
-      background: #0d0d1a; border-radius: 7px; padding: 6px 10px;
-    }
-    #rp-flag   { font-size: 20px; line-height: 1; }
-    #rp-ip-info { flex: 1; }
-    #rp-ip     { font-size: 13px; color: #e0e0e0; font-weight: bold; }
-    #rp-country{ font-size: 10px; color: #666; display: block; }
 
     .rp-row    { display:flex; justify-content:space-between; align-items:center; font-size:11px; }
     .rp-label  { color:#555; }
@@ -223,14 +215,6 @@
         </span>
       </div>
 
-      <div id="rp-ip-row">
-        <span id="rp-flag">🌐</span>
-        <span id="rp-ip-info">
-          <span id="rp-ip">—</span>
-          <span id="rp-country"></span>
-        </span>
-      </div>
-
       <div class="rp-row">
         <span class="rp-label" id="rp-lbl-circuits"></span>
         <span class="rp-val" id="rp-instances">—</span>
@@ -258,6 +242,16 @@
         <label id="rp-lbl-pass"></label>
         <input id="rp-pass" type="password" autocomplete="current-password">
         <button id="rp-btn-save"></button>
+      </div>
+
+      <div style="border-top:1px solid #2d2d5e;margin-top:8px;padding-top:6px;display:flex;align-items:center;justify-content:space-between">
+        <span style="color:#444;font-size:10px">&#x2B21; ProxySpin</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <a href="https://github.com/Aerya" target="_blank" style="color:#7c83fd;text-decoration:none;font-size:10px;font-weight:500">GitHub</a>
+          <a href="https://upandclear.org/" target="_blank" style="color:#7c83fd;text-decoration:none;font-size:10px;font-weight:500">Blog</a>
+          <img src="https://upandclear.org/wp-content/uploads/2024/06/Logo.detoure1.png.webp" alt="Aerya" style="width:16px;height:16px;border-radius:50%;object-fit:cover">
+          <strong style="color:#7c83fd;font-size:10px">Aerya</strong>
+        </div>
       </div>
     </div>
   `;
@@ -357,18 +351,12 @@
           t('searching'),
           s.loading_message || ''
         );
-        el('rp-flag').textContent    = '⏳';
-        el('rp-ip').textContent      = '—';
-        el('rp-country').textContent = '';
       } else if (s.mode === 'tor') {
         setStateBar('tor', '🧅', t('conn_tor'), `${s.instances} ${t('circuits')}`);
-        if (lastMode !== 'tor') fetchGeo();
       } else if (s.mode === 'local') {
         setStateBar('proxy', '📂', t('conn_local'), `${s.instances} ${t('proxies_active')}`);
-        if (lastMode !== 'local') fetchGeo();
       } else {
         setStateBar('proxy', '🌐', t('conn_proxy'), `${s.instances} ${t('proxies_active')}`);
-        if (lastMode !== 'proxy') fetchGeo();
       }
 
       if (s.mode !== 'tor' && !s.loading) {
@@ -382,34 +370,10 @@
 
     } catch {
       setStateBar('offline', '✗', t('offline'), CFG.base);
-      el('rp-flag').textContent      = '❌';
-      el('rp-ip').textContent        = '—';
-      el('rp-country').textContent   = '';
       el('rp-instances').textContent = '—';
       el('rp-btn-rotate').disabled   = true;
     }
-  }
-
-  // ─── Géolocalisation de l'IP de sortie ────────────────────────────────────
-  async function fetchGeo() {
-    el('rp-ip').textContent      = '…';
-    el('rp-flag').textContent    = '🌐';
-    el('rp-country').textContent = '';
-    try {
-      const r = await gmReq('GET', 'https://ipapi.co/json/');
-      if (r.status !== 200) throw new Error();
-      const d = JSON.parse(r.responseText);
-      el('rp-ip').textContent      = d.ip        || '?';
-      el('rp-flag').textContent    = countryFlag(d.country_code);
-      el('rp-country').textContent = d.country_name || d.country_code || '';
-    } catch {
-      try {
-        const r2 = await gmReq('GET', 'https://icanhazip.com/');
-        el('rp-ip').textContent = r2.responseText.trim() || '?';
-      } catch {
-        el('rp-ip').textContent = '(erreur)';
-      }
-    }
+  }    }
   }
 
   // ─── Filtre pays ──────────────────────────────────────────────────────────
@@ -435,7 +399,6 @@
   el('rp-sel-country').addEventListener('change', async function() {
     _countriesLoaded = false;
     await gmReq('POST', apiUrl('/api/country'), { country: this.value });
-    fetchGeo();
   });
 
   // ─── Nouvelle IP ──────────────────────────────────────────────────────────
@@ -453,9 +416,6 @@
       t('ip_changing'),
       t('new_circuit')
     );
-    el('rp-flag').textContent    = '⏳';
-    el('rp-ip').textContent      = '—';
-    el('rp-country').textContent = '';
 
     try {
       const r = await gmReq('POST', apiUrl('/api/rotate'));
@@ -475,20 +435,17 @@
         clearInterval(cdTimer);
         el('rp-cooldown').textContent = '';
         el('rp-btn-rotate').disabled = false;
-        fetchGeo();
       } else {
         el('rp-cooldown').textContent = `${t('circuit_in')} ${remaining}s`;
       }
     }, 1000);
 
-    setTimeout(() => { checkStatus(); fetchGeo(); }, 5000);
+    setTimeout(() => { checkStatus(); }, 5000);
   });
 
   // ─── Init ─────────────────────────────────────────────────────────────────
   applyTranslations();
   checkStatus();
-  fetchGeo();
   setInterval(checkStatus, 20000);
-  setInterval(fetchGeo,    20000);
 
 })();

@@ -6,7 +6,7 @@ services:
     ports:
       - 1973:1973 # Proxy rotatif
       - 1974:1974 # Web UI + API de contrôle
-      - 1976:1976 # HAProxy stats
+      # - 1976:1976 # HAProxy stats (désactivé par défaut — décommenter pour activer)
     environment:
       # ── Mode : 'tor' ou 'proxy' (proxies gratuits) ──
       - MODE=tor

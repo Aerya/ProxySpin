@@ -47,7 +47,7 @@ Port **1973 is managed by a Python server** (modelled after Gluetun's mechanism)
 |------|------|------|
 | `1973` | Rotating HTTP proxy (entry point) | Basic auth (`PROXY_USER` / `PROXY_PASS`) |
 | `1974` | Web control panel + JSON API | Basic auth (`STATS_USER` / `STATS_PASS`) |
-| `1976` | HAProxy stats | Basic auth (`STATS_USER` / `STATS_PASS`) |
+| `1976` | HAProxy stats *(disabled by default)* | Basic auth (`STATS_USER` / `STATS_PASS`) |
 
 ## Quick start
 
@@ -127,13 +127,19 @@ All three exposed ports can be protected by **HTTP Basic auth**:
 > localhost, 127.0.0.1, 192.168.0.0/24
 > ```
 
+> ⚠️ **WebRTC leak**: WebRTC can reveal your real IP address even behind a proxy, because it establishes P2P connections that bypass the browser's proxy settings. **Disable WebRTC** in your browser before using ProxySpin.
+>
+> Disable guide (Chrome, Firefox, Safari, Opera, Edge): [K3V1991/How-to-disable-WebRTC](https://github.com/K3V1991/How-to-disable-WebRTC-in-Chrome-Firefox-Safari-Opera-and-Edge)
+>
+> In LibreWolf / Firefox: `about:config` → `media.peerconnection.enabled` → `false`
+
 ## Usage
 
 **Configure your browser** to use `http://YOUR_IP:1973` as an HTTP proxy (credentials `PROXY_USER` / `PROXY_PASS` if auth is enabled).
 
 **Web panel**: `http://YOUR_IP:1974` (credentials `STATS_USER` / `STATS_PASS` if auth is enabled)
 
-**HAProxy stats**: `http://YOUR_IP:1976/` (same credentials)
+**HAProxy stats**: `http://YOUR_IP:1976/` (same credentials) — disabled by default, uncomment in `docker-compose.yml` to enable
 
 ## Proxy sources (proxy mode)
 

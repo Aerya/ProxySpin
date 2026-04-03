@@ -47,7 +47,7 @@ Le port **1973 est géré par un serveur Python** (calqué sur le mécanisme de 
 |------|------|------|
 | `1973` | Proxy HTTP rotatif (point d'entrée) | Basic auth (`PROXY_USER` / `PROXY_PASS`) |
 | `1974` | Interface web de contrôle + API JSON | Basic auth (`STATS_USER` / `STATS_PASS`) |
-| `1976` | HAProxy stats | Basic auth (`STATS_USER` / `STATS_PASS`) |
+| `1976` | HAProxy stats *(désactivé par défaut)* | Basic auth (`STATS_USER` / `STATS_PASS`) |
 
 ## Démarrage rapide
 
@@ -127,13 +127,19 @@ Les trois ports exposés peuvent être protégés par **HTTP Basic auth** :
 > localhost, 127.0.0.1, 192.168.0.0/24
 > ```
 
+> ⚠️ **Fuite WebRTC** : WebRTC peut révéler votre adresse IP réelle même derrière un proxy, car il établit des connexions P2P en contournant la configuration proxy du navigateur. **Désactivez WebRTC** dans votre navigateur avant d'utiliser ProxySpin.
+>
+> Guide de désactivation (Chrome, Firefox, Safari, Opera, Edge) : [K3V1991/How-to-disable-WebRTC](https://github.com/K3V1991/How-to-disable-WebRTC-in-Chrome-Firefox-Safari-Opera-and-Edge)
+>
+> Sous LibreWolf / Firefox : `about:config` → `media.peerconnection.enabled` → `false`
+
 ## Utilisation
 
 **Configurer le navigateur** pour utiliser `http://VOTRE_IP:1973` comme proxy HTTP (identifiants `PROXY_USER` / `PROXY_PASS` si auth activée).
 
 **Interface web** : `http://VOTRE_IP:1974` (identifiants `STATS_USER` / `STATS_PASS` si auth activée)
 
-**HAProxy stats** : `http://VOTRE_IP:1976/` (mêmes identifiants)
+**HAProxy stats** : `http://VOTRE_IP:1976/` (mêmes identifiants) — port désactivé par défaut, décommenter dans `docker-compose.yml` pour l'activer
 
 ## Sources de proxies (mode proxy)
 
