@@ -73,7 +73,7 @@ All options are environment variables in `docker-compose.yml`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODE` | `tor` | Mode at startup: `tor`, `proxy` or `local` |
-| `AUTO_ROTATION` | `true` | Automatic rotation enabled at startup |
+| `AUTO_ROTATION` | `true` (`tor` mode) / `false` (`proxy` and `local` modes) | Automatic rotation enabled at startup |
 | `ROTATION_INTERVAL` | `60` | Rotation interval in seconds at startup |
 | `tors` | `10` | Number of parallel Tor instances (mode `tor`) |
 | `MAX_PROXIES` | `20` | Number of proxies active in HAProxy (modes `proxy` and `local`) |
@@ -102,6 +102,8 @@ When auth is disabled, the corresponding `PROXY_USER`/`PROXY_PASS` or `STATS_USE
 
 **`MODE` / `AUTO_ROTATION` / `ROTATION_INTERVAL`**
 These variables define the state **when the container starts**. Once running, all of them can be changed live from the web UI (port 1974) or the userscript — no restart needed. Live changes are lost if the container restarts; set them in `docker-compose.yml` for persistent behaviour.
+
+Auto-rotation is **enabled by default in `tor` mode** (circuit renewal every 60 seconds) and **disabled by default in `proxy` and `local` modes** — free proxies are less stable and frequent rotation can interrupt active connections. It can be enabled manually from the Web UI. Switching modes from the Web UI automatically adjusts this behaviour (unless `AUTO_ROTATION` is explicitly set in `docker-compose.yml`).
 
 **`tors`**
 In `tor` mode, ProxySpin starts N completely independent Tor processes. Each one builds its own 3-hop encrypted circuit and has its own exit IP. HAProxy distributes requests across these N instances. With `tors=10` you have 10 different exit IPs available simultaneously.

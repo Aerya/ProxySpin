@@ -60,7 +60,7 @@ logger = logging.getLogger('proxyspin')
 config = {
     'mode':              os.environ.get('MODE',              'tor'),
     'rotation_interval': int(os.environ.get('ROTATION_INTERVAL', '60')),
-    'auto_rotation':     os.environ.get('AUTO_ROTATION',     'true').lower() == 'true',
+    'auto_rotation':     os.environ.get('AUTO_ROTATION', 'true' if os.environ.get('MODE', 'tor') == 'tor' else 'false').lower() == 'true',
     'tor_instances':     int(os.environ.get('tors',          '10')),
     'max_free_proxies':  int(os.environ.get('MAX_PROXIES',   '20')),
     'country_filter':    (os.environ.get('COUNTRY_FILTER') or '').upper() or None,
@@ -1004,6 +1004,9 @@ class ProxyManager:
             self.haproxy.backends.clear()
             with config_lock:
                 config['mode'] = new_mode
+                # Auto-rotation : activée par défaut pour Tor, désactivée pour les proxies
+                if 'AUTO_ROTATION' not in os.environ:
+                    config['auto_rotation'] = (new_mode == 'tor')
             self._launch_backends()
             self.haproxy.soft_reload()
             return {'ok': True, 'mode': self.mode, 'instances': len(self._proxies)}
