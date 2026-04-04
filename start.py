@@ -1262,6 +1262,55 @@ WEB_UI_HTML = """<!DOCTYPE html>
     <div id="msg-sources" style="font-size:12px;color:#4caf50;min-height:16px;margin-top:6px"></div>
   </div>
 
+  <!-- ─── Carte Cloudflare Worker (visible uniquement en mode cloudflare) ─── -->
+  <div class="card" id="cf-card" style="margin-top:16px;display:none">
+    <h2 id="lbl-cf-card"></h2>
+
+    <div class="field">
+      <label id="lbl-cf-token"></label>
+      <input type="password" id="inp-cf-token" autocomplete="off" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;">
+    </div>
+    <div class="field">
+      <label id="lbl-cf-account"></label>
+      <input type="text" id="inp-cf-account" placeholder="abc123def456...">
+    </div>
+    <div class="field">
+      <label id="lbl-cf-name"></label>
+      <input type="text" id="inp-cf-name" placeholder="mon-proxy">
+      <span id="cf-worker-url" style="color:#555;font-size:11px;display:block;margin-top:4px"></span>
+    </div>
+    <div class="field">
+      <label id="lbl-cf-sep"></label>
+      <input type="text" id="inp-cf-sep" placeholder="------">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn-save" id="btn-cf-save" style="flex:1;margin-top:0"></button>
+      <button class="btn-primary" id="btn-cf-deploy" style="flex:1;margin-top:0"></button>
+    </div>
+    <div id="msg-cf" style="font-size:12px;color:#4caf50;min-height:16px;margin-top:6px;text-align:center"></div>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #2d2d5e">
+      <div class="row"><span class="label" id="lbl-cf-deployed"></span><span class="value" id="cf-deployed-at" style="color:#666;font-size:12px">—</span></div>
+      <div class="row" style="margin-top:6px"><span class="label" id="lbl-cf-sha"></span><span id="cf-sha" style="color:#555;font-family:monospace;font-size:11px">—</span></div>
+    </div>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #2d2d5e">
+      <div class="row">
+        <span class="label" id="lbl-cf-quota"></span>
+        <span class="value" id="cf-quota-count">—</span>
+      </div>
+      <div class="quota-bar-bg">
+        <div class="quota-bar ok" id="cf-quota-bar" style="width:0%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#555">
+        <span id="cf-quota-pct">0%</span>
+        <span id="cf-quota-reset"></span>
+      </div>
+    </div>
+
+    <div class="cf-note" id="cf-https-warn"></div>
+  </div>
+
   <script>
     // ── i18n ──────────────────────────────────────────────────────────────────
     var LANG = localStorage.getItem('ps_lang') || (navigator.language.startsWith('fr') ? 'fr' : 'en');
@@ -1731,55 +1780,6 @@ WEB_UI_HTML = """<!DOCTYPE html>
       setTimeout(function() { $('msg-cf').textContent = ''; }, 6000);
     });
   </script>
-
-  <!-- ─── Carte Cloudflare Worker (visible uniquement en mode cloudflare) ─── -->
-  <div class="card" id="cf-card" style="margin-top:16px;display:none">
-    <h2 id="lbl-cf-card"></h2>
-
-    <div class="field">
-      <label id="lbl-cf-token"></label>
-      <input type="password" id="inp-cf-token" autocomplete="off" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;">
-    </div>
-    <div class="field">
-      <label id="lbl-cf-account"></label>
-      <input type="text" id="inp-cf-account" placeholder="abc123def456...">
-    </div>
-    <div class="field">
-      <label id="lbl-cf-name"></label>
-      <input type="text" id="inp-cf-name" placeholder="mon-proxy">
-      <span id="cf-worker-url" style="color:#555;font-size:11px;display:block;margin-top:4px"></span>
-    </div>
-    <div class="field">
-      <label id="lbl-cf-sep"></label>
-      <input type="text" id="inp-cf-sep" placeholder="------">
-    </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn-save" id="btn-cf-save" style="flex:1;margin-top:0"></button>
-      <button class="btn-primary" id="btn-cf-deploy" style="flex:1;margin-top:0"></button>
-    </div>
-    <div id="msg-cf" style="font-size:12px;color:#4caf50;min-height:16px;margin-top:6px;text-align:center"></div>
-
-    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #2d2d5e">
-      <div class="row"><span class="label" id="lbl-cf-deployed"></span><span class="value" id="cf-deployed-at" style="color:#666;font-size:12px">—</span></div>
-      <div class="row" style="margin-top:6px"><span class="label" id="lbl-cf-sha"></span><span id="cf-sha" style="color:#555;font-family:monospace;font-size:11px">—</span></div>
-    </div>
-
-    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #2d2d5e">
-      <div class="row">
-        <span class="label" id="lbl-cf-quota"></span>
-        <span class="value" id="cf-quota-count">—</span>
-      </div>
-      <div class="quota-bar-bg">
-        <div class="quota-bar ok" id="cf-quota-bar" style="width:0%"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:#555">
-        <span id="cf-quota-pct">0%</span>
-        <span id="cf-quota-reset"></span>
-      </div>
-    </div>
-
-    <div class="cf-note" id="cf-https-warn"></div>
-  </div>
 
   <footer style="margin-top:24px;padding:16px 0 8px;border-top:1px solid #2d2d5e;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:11px;color:#555">
     <span>&#x2B21; ProxySpin</span>
