@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 LABEL maintainer="Aerya <blog@upandclear.org>"
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -24,6 +24,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY start.py /usr/local/bin/start.py
+COPY cfworker.py /usr/local/bin/cfworker.py
+COPY cloudflare_worker.js /usr/local/bin/cloudflare_worker.js
 RUN chmod +x /usr/local/bin/start.py
 
 EXPOSE 1973 1974 1976
