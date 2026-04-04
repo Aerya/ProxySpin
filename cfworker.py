@@ -253,13 +253,15 @@ class CFWorkerDeployer:
 
         deployed_at = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        # ── Récupération du sous-domaine workers.dev ───────────────────────────
+        # ── Récupération du sous-domaine workers.dev (ne pas écraser si déjà sauvegardé) ─
         subdomain = self._fetch_subdomain(api_token, account_id)
-        CFWorkerConfig().save({
-            'last_sha256':       sha256,
-            'last_deployed_at':  deployed_at,
-            'workers_subdomain': subdomain,
-        })
+        save_data = {'last_sha256': sha256, 'last_deployed_at': deployed_at}
+        if subdomain:  # n'écraser que si on a trouvé quelque chose
+            save_data['workers_subdomain'] = subdomain
+        else:
+            # Utiliser le subdomain déjà en config si l'API ne répond pas
+            subdomain = CFWorkerConfig().get('workers_subdomain', '')
+        CFWorkerConfig().save(save_data)
 
         worker_fqdn = f'{worker_name}.{subdomain}.workers.dev' if subdomain else f'{worker_name}.workers.dev'
         logger.info(f'CF Worker "{worker_name}" déployé → {worker_fqdn} (sha256:{sha256})')
