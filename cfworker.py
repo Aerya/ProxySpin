@@ -206,6 +206,24 @@ class CFWorkerDeployer:
             logger.warning(f'Impossible de récupérer le subdomain CF : {e}')
             return ''
 
+    def _enable_workers_dev(self, api_token: str, account_id: str, worker_name: str):
+        """Active la route workers.dev pour le script (sinon 404 sur <name>.workers.dev)."""
+        url  = (f'https://api.cloudflare.com/client/v4/accounts/{account_id}'
+                f'/workers/scripts/{worker_name}/subdomain')
+        body = json.dumps({'enabled': True}).encode()
+        req  = Request(url, data=body, method='PUT')
+        req.add_header('Authorization', f'Bearer {api_token}')
+        req.add_header('Content-Type',  'application/json')
+        try:
+            with urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            if data.get('success'):
+                logger.info(f'CF Worker workers.dev activé pour "{worker_name}"')
+            else:
+                logger.warning(f'CF workers.dev enable: {data}')
+        except Exception as e:
+            logger.warning(f'Impossible d\'activer workers.dev pour {worker_name} : {e}')
+
     def deploy(self, api_token: str, account_id: str, worker_name: str,
                separator: str = '------') -> dict:
         """
@@ -252,6 +270,9 @@ class CFWorkerDeployer:
             raise RuntimeError(f"Déploiement refusé — {'; '.join(msgs)}")
 
         deployed_at = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # ── Activation de la route workers.dev pour ce script ─────────────────
+        self._enable_workers_dev(api_token, account_id, worker_name)
 
         # ── Récupération du sous-domaine workers.dev (ne pas écraser si déjà sauvegardé) ─
         subdomain = self._fetch_subdomain(api_token, account_id)
