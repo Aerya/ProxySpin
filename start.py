@@ -23,12 +23,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
+# ─── Module optionnel Cloudflare Worker ───────────────────────────────────────
+try:
+    import cfworker as _cfworker
+    _CF_AVAILABLE = True
+except ImportError:
+    _cfworker     = None
+    _CF_AVAILABLE = False
+
 # ─── Ports ────────────────────────────────────────────────────────────────────
 
 PROXY_PORT    = 1973   # Python ProxyAuth — point d'entrée exposé
 HAPROXY_PORT  = 11973  # HAProxy interne (localhost uniquement, pas d'auth)
 API_PORT      = 1974   # Web UI + API JSON
 STATS_PORT    = 1976   # HAProxy stats
+# Port 1975 réservé CF Worker (bridge interne, non exposé)
 
 # ─── Auth enabled flags ────────────────────────────────────────────────────────
 # Mettre 'false' pour désactiver l'auth sur un port donné.
@@ -439,6 +448,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_CONNECT(self):
         if not self._auth_ok():
             return
+        # Mode Cloudflare Worker : HTTPS (CONNECT) non supporté par WorkerProxy.js
+        if config.get('mode') == 'cloudflare':
+            msg = (b'CF Worker mode ne supporte pas HTTPS/CONNECT. '
+                   b'Configurez votre client en HTTP uniquement.')
+            self.send_response(502, 'CF Worker: HTTPS non supporte')
+            self.send_header('Content-Type',   'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(msg)))
+            self.send_header('Connection',     'close')
+            self.end_headers()
+            self.wfile.write(msg)
+            logger.debug(f'CF Worker: CONNECT refusé pour {self.path} (HTTPS non supporté)')
+            return
         def _abort():
             """Coupe la connexion client brutalement pour éviter tout fallback direct."""
             try:
@@ -489,6 +510,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     def _do_http(self):
         if not self._auth_ok():
+            return
+        # Mode Cloudflare Worker : bypass HAProxy, routage direct via CF Worker
+        if config.get('mode') == 'cloudflare':
+            if not _CF_AVAILABLE:
+                self.send_error(503, 'Module cfworker non disponible')
+                return
+            _cfworker.handle_http_request(self)
             return
         try:
             backend = socket.create_connection(('127.0.0.1', HAPROXY_PORT), timeout=30)
@@ -860,26 +888,34 @@ class ProxyManager:
                 self._last_rotation = time.time()
                 threading.Thread(target=self._probe_tor_backends, args=(15,), daemon=True).start()
                 return {'ok': True, 'mode': 'tor', 'message': f"rotate envoyé ({len(self._proxies)} circuits)"}
+            elif self.mode == 'cloudflare':
+                return {'ok': False, 'message': 'Rotation non applicable en mode Cloudflare Worker'}
             else:
                 n = self._reload_local_proxies()
                 self._last_rotation = time.time()
                 return {'ok': True, 'mode': 'local', 'message': f"{n} proxies rechargés"}
 
     def switch_mode(self, new_mode):
-        if new_mode not in ('tor', 'local'):
-            return {'ok': False, 'error': 'Mode invalide (tor | local)'}
+        if new_mode not in ('tor', 'local', 'cloudflare'):
+            return {'ok': False, 'error': 'Mode invalide (tor | local | cloudflare)'}
         with self._lock:
             if new_mode == self.mode:
                 return {'ok': False, 'message': f"Déjà en mode '{new_mode}'"}
-            logger.info(f'Changement de mode: {self.mode} → {new_mode}')
+            old_mode = self.mode
+            logger.info(f'Changement de mode: {old_mode} → {new_mode}')
             self._stop_backends()
             self.haproxy.backends.clear()
             with config_lock:
                 config['mode'] = new_mode
                 if 'AUTO_ROTATION' not in os.environ:
                     config['auto_rotation'] = (new_mode == 'tor')
-            self._launch_backends()
-            self.haproxy.soft_reload()
+            if new_mode != 'cloudflare':
+                # Tor et Local utilisent HAProxy normalement
+                self._launch_backends()
+                self.haproxy.soft_reload()
+            else:
+                # CF Worker : bypass HAProxy, pas de backends à démarrer
+                logger.info('Mode Cloudflare Worker activé — HAProxy bypassé')
             return {'ok': True, 'mode': self.mode, 'instances': len(self._proxies)}
 
     def update_config(self, params):
@@ -991,6 +1027,8 @@ class ProxyManager:
     def _launch_backends(self):
         if self.mode == 'tor':
             self._start_tor_backends()
+        elif self.mode == 'cloudflare':
+            pass  # Pas de backends HAProxy — bypass direct dans _ProxyHandler
         else:
             self._reload_local_proxies()
 
@@ -1109,8 +1147,15 @@ WEB_UI_HTML = """<!DOCTYPE html>
     .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:bold}
     .badge-tor{background:#1a1a3e;color:#7c83fd;border:1px solid #7c83fd}
     .badge-proxy{background:#1a3020;color:#4caf50;border:1px solid #4caf50}
+    .badge-cloudflare{background:#1a2010;color:#ff9800;border:1px solid #ff9800}
     .badge-ok{background:#1a3020;color:#4caf50}
     .badge-off{background:#3e1a1a;color:#f44336}
+    .quota-bar-bg{background:#0d0d1a;border-radius:6px;overflow:hidden;height:8px;margin:8px 0}
+    .quota-bar{height:100%;border-radius:6px;transition:width .5s,background .3s}
+    .quota-bar.ok{background:#4caf50}
+    .quota-bar.warn{background:#ff9800}
+    .quota-bar.danger{background:#f44336}
+    .cf-note{margin-top:12px;padding:8px 12px;background:#2a1a00;border:1px solid #ff980033;border-radius:6px;font-size:11px;color:#ff9800;line-height:1.5}
     select,input[type=number]{background:#0d0d1a;border:1px solid #2d2d5e;border-radius:6px;color:#e0e0e0;font-family:monospace;font-size:13px;padding:6px 10px;width:100%}
     .field{margin-bottom:12px}
     .field label{display:block;color:#666;font-size:11px;margin-bottom:5px}
@@ -1173,6 +1218,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         <select id="sel-mode">
           <option value="tor">&#x1F9C5; Tor</option>
           <option value="local" id="opt-local"></option>
+          <option value="cloudflare" id="opt-cloudflare"></option>
         </select>
       </div>
       <div class="field">
@@ -1264,6 +1310,22 @@ WEB_UI_HTML = """<!DOCTYPE html>
         error:          'Erreur',
         new_ip:         '🔄 Nouvelle IP',
         rotate_ok:      '\u2713 IP chang\u00e9e',
+        opt_cloudflare: '&#x2601; Cloudflare Worker',
+        cf_card:        'CLOUDFLARE WORKER',
+        cf_token:       'API Token Cloudflare',
+        cf_account:     'Account ID',
+        cf_name:        'Nom du Worker',
+        cf_sep:         'S\u00e9parateur',
+        cf_save:        'Sauvegarder',
+        cf_deploy:      '&#x1F680; D\u00e9ployer / Mettre \u00e0 jour',
+        cf_deploying:   '\u29d7 D\u00e9ploiement en cours\u2026',
+        cf_deployed:    'D\u00e9ploy\u00e9 avec succ\u00e8s',
+        cf_not_dep:     'Jamais d\u00e9ploy\u00e9',
+        cf_last_dep:    'Dernier d\u00e9ploiement',
+        cf_sha:         'Version JS',
+        cf_quota:       'Quota journalier',
+        cf_reset_in:    'Reset dans',
+        cf_warn:        '\u26a0 CF Worker supporte uniquement HTTP (pas HTTPS). Les sites en https:// ne seront pas accessibles via ce mode.',
       },
       en: {
         subtitle:       'Control panel',
@@ -1309,6 +1371,22 @@ WEB_UI_HTML = """<!DOCTYPE html>
         error:          'Error',
         new_ip:         '🔄 New IP',
         rotate_ok:      '\u2713 IP changed',
+        opt_cloudflare: '&#x2601; Cloudflare Worker',
+        cf_card:        'CLOUDFLARE WORKER',
+        cf_token:       'Cloudflare API Token',
+        cf_account:     'Account ID',
+        cf_name:        'Worker Name',
+        cf_sep:         'Separator',
+        cf_save:        'Save',
+        cf_deploy:      '&#x1F680; Deploy / Update',
+        cf_deploying:   '\u29d7 Deploying\u2026',
+        cf_deployed:    'Successfully deployed',
+        cf_not_dep:     'Never deployed',
+        cf_last_dep:    'Last deployment',
+        cf_sha:         'JS Version',
+        cf_quota:       'Daily quota',
+        cf_reset_in:    'Reset in',
+        cf_warn:        '\u26a0 CF Worker only supports HTTP (not HTTPS). Sites on https:// will not be accessible in this mode.',
       }
     };
     function t(k) { return (TR[LANG] && TR[LANG][k]) || TR.fr[k] || k; }
@@ -1339,6 +1417,18 @@ WEB_UI_HTML = """<!DOCTYPE html>
       document.getElementById('inp-src-label').placeholder      = t('src_lbl_ph');
       document.getElementById('btn-add-src').textContent        = t('add_btn');
       document.getElementById('btn-rotate').textContent         = t('new_ip');
+      document.getElementById('opt-cloudflare').innerHTML       = t('opt_cloudflare');
+      document.getElementById('lbl-cf-card').textContent        = t('cf_card');
+      document.getElementById('lbl-cf-token').textContent       = t('cf_token');
+      document.getElementById('lbl-cf-account').textContent     = t('cf_account');
+      document.getElementById('lbl-cf-name').textContent        = t('cf_name');
+      document.getElementById('lbl-cf-sep').textContent         = t('cf_sep');
+      document.getElementById('btn-cf-save').textContent        = t('cf_save');
+      document.getElementById('btn-cf-deploy').innerHTML        = t('cf_deploy');
+      document.getElementById('lbl-cf-deployed').textContent    = t('cf_last_dep');
+      document.getElementById('lbl-cf-sha').textContent         = t('cf_sha');
+      document.getElementById('lbl-cf-quota').textContent       = t('cf_quota');
+      document.getElementById('cf-https-warn').textContent      = t('cf_warn');
       // country select first option
       var sel = document.getElementById('sel-country');
       if (sel.options.length > 0) sel.options[0].textContent = t('all_countries');
@@ -1407,16 +1497,30 @@ WEB_UI_HTML = """<!DOCTYPE html>
       if (s.mode === 'tor') {
         modeBadge.textContent = '🧅 Tor';
         modeBadge.className = 'badge badge-tor';
+      } else if (s.mode === 'cloudflare') {
+        modeBadge.innerHTML = '&#x2601; Cloudflare';
+        modeBadge.className = 'badge badge-cloudflare';
       } else {
         modeBadge.textContent = '📂 Local';
         modeBadge.className = 'badge badge-proxy';
       }
 
-      $('instances').textContent  = s.instances;
+      $('instances').textContent  = s.mode === 'cloudflare' ? '1 Worker' : s.instances;
       $('auto-badge').textContent = s.auto_rotation ? 'ON' : 'OFF';
       $('auto-badge').className   = 'badge ' + (s.auto_rotation ? 'badge-ok' : 'badge-off');
       $('interval-val').textContent = s.rotation_interval + 's';
       $('last-rot').textContent   = t('last_rot') + new Date(s.last_rotation).toLocaleTimeString();
+
+      // Carte CF Worker : visible uniquement en mode cloudflare
+      var cfCard = $('cf-card');
+      if (s.mode === 'cloudflare') {
+        cfCard.style.display = 'block';
+        loadCFStatus();
+        startCFQuotaPolling();
+      } else {
+        cfCard.style.display = 'none';
+        stopCFQuotaPolling();
+      }
 
       $('sel-mode').value     = s.mode;
       $('chk-auto').checked   = s.auto_rotation;
@@ -1446,7 +1550,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         }).join('');
       }
 
-      if (s.mode !== 'tor') {
+      if (s.mode === 'local') {
         $('country-row').style.display = 'flex';
         loadCountriesWeb(s.country_filter);
       } else {
@@ -1542,7 +1646,140 @@ WEB_UI_HTML = """<!DOCTYPE html>
     });
 
     loadSources();
+
+    // ── Cloudflare Worker ────────────────────────────────────────────────────
+    var _cfStatusLoaded = false;
+    var _cfQuotaInterval = null;
+
+    async function loadCFStatus() {
+      if (_cfStatusLoaded) return;
+      const r = await api('GET', '/api/cf/status').catch(() => null);
+      if (!r) return;
+      _cfStatusLoaded = true;
+      $('inp-cf-account').value = r.account_id  || '';
+      $('inp-cf-name').value    = r.worker_name || '';
+      $('inp-cf-sep').value     = r.separator   || '------';
+      // Ne pas pré-remplir le token (sécurité)
+      if (r.worker_url) {
+        $('cf-worker-url').textContent = '\u2192 ' + r.worker_url;
+      }
+      $('cf-deployed-at').textContent = r.last_deployed || t('cf_not_dep');
+      $('cf-sha').textContent = r.last_sha256 ? 'sha256:' + r.last_sha256 : '\u2014';
+    }
+
+    async function refreshCFQuota() {
+      const r = await api('GET', '/api/cf/stats').catch(() => null);
+      if (!r || r.used === undefined) return;
+      var pct = r.percent || 0;
+      var barEl = $('cf-quota-bar');
+      $('cf-quota-count').textContent = r.used.toLocaleString() + ' / ' + r.limit.toLocaleString();
+      barEl.style.width = pct + '%';
+      barEl.className = 'quota-bar ' + (pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok');
+      $('cf-quota-pct').textContent = pct + '%';
+      if (r.reset_in_s > 0) {
+        var h = Math.floor(r.reset_in_s / 3600);
+        var m = Math.floor((r.reset_in_s % 3600) / 60);
+        $('cf-quota-reset').textContent = t('cf_reset_in') + ' ' + h + 'h ' + m + 'min';
+      }
+    }
+
+    function startCFQuotaPolling() {
+      if (_cfQuotaInterval) return;
+      refreshCFQuota();
+      _cfQuotaInterval = setInterval(refreshCFQuota, 30000);
+    }
+
+    function stopCFQuotaPolling() {
+      if (_cfQuotaInterval) { clearInterval(_cfQuotaInterval); _cfQuotaInterval = null; }
+    }
+
+    // Prévisualisation URL en direct
+    $('inp-cf-name').addEventListener('input', function() {
+      var name = this.value.trim();
+      $('cf-worker-url').textContent = name ? '\u2192 https://' + name + '.workers.dev' : '';
+    });
+
+    // Sauvegarde config
+    $('btn-cf-save').addEventListener('click', async function() {
+      var body = {
+        account_id:  $('inp-cf-account').value.trim(),
+        worker_name: $('inp-cf-name').value.trim(),
+        separator:   $('inp-cf-sep').value.trim() || '------',
+      };
+      var token = $('inp-cf-token').value.trim();
+      if (token) body.api_token = token;
+      $('msg-cf').textContent = t('applying');
+      var r = await api('POST', '/api/cf/config', body).catch(() => ({ ok: false }));
+      $('msg-cf').textContent = r.ok ? t('cfg_saved') : '\u2717 ' + (r.error || t('error'));
+      if (r.ok) { $('inp-cf-token').value = ''; _cfStatusLoaded = false; }
+      setTimeout(function() { $('msg-cf').textContent = ''; }, 4000);
+    });
+
+    // Déploiement
+    $('btn-cf-deploy').addEventListener('click', async function() {
+      $('btn-cf-deploy').disabled = true;
+      $('msg-cf').textContent = t('cf_deploying');
+      var r = await api('POST', '/api/cf/deploy').catch(() => ({ ok: false }));
+      if (r.ok) {
+        $('cf-deployed-at').textContent = r.deployed_at || '';
+        $('cf-sha').textContent = r.sha256 ? 'sha256:' + r.sha256 : '';
+        $('msg-cf').textContent = '\u2713 ' + t('cf_deployed');
+      } else {
+        $('msg-cf').textContent = '\u2717 ' + (r.error || t('error'));
+      }
+      $('btn-cf-deploy').disabled = false;
+      setTimeout(function() { $('msg-cf').textContent = ''; }, 6000);
+    });
   </script>
+
+  <!-- ─── Carte Cloudflare Worker (visible uniquement en mode cloudflare) ─── -->
+  <div class="card" id="cf-card" style="margin-top:16px;display:none">
+    <h2 id="lbl-cf-card"></h2>
+
+    <div class="field">
+      <label id="lbl-cf-token"></label>
+      <input type="password" id="inp-cf-token" autocomplete="off" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;">
+    </div>
+    <div class="field">
+      <label id="lbl-cf-account"></label>
+      <input type="text" id="inp-cf-account" placeholder="abc123def456...">
+    </div>
+    <div class="field">
+      <label id="lbl-cf-name"></label>
+      <input type="text" id="inp-cf-name" placeholder="mon-proxy">
+      <span id="cf-worker-url" style="color:#555;font-size:11px;display:block;margin-top:4px"></span>
+    </div>
+    <div class="field">
+      <label id="lbl-cf-sep"></label>
+      <input type="text" id="inp-cf-sep" placeholder="------">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn-save" id="btn-cf-save" style="flex:1;margin-top:0"></button>
+      <button class="btn-primary" id="btn-cf-deploy" style="flex:1;margin-top:0"></button>
+    </div>
+    <div id="msg-cf" style="font-size:12px;color:#4caf50;min-height:16px;margin-top:6px;text-align:center"></div>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #2d2d5e">
+      <div class="row"><span class="label" id="lbl-cf-deployed"></span><span class="value" id="cf-deployed-at" style="color:#666;font-size:12px">—</span></div>
+      <div class="row" style="margin-top:6px"><span class="label" id="lbl-cf-sha"></span><span id="cf-sha" style="color:#555;font-family:monospace;font-size:11px">—</span></div>
+    </div>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #2d2d5e">
+      <div class="row">
+        <span class="label" id="lbl-cf-quota"></span>
+        <span class="value" id="cf-quota-count">—</span>
+      </div>
+      <div class="quota-bar-bg">
+        <div class="quota-bar ok" id="cf-quota-bar" style="width:0%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#555">
+        <span id="cf-quota-pct">0%</span>
+        <span id="cf-quota-reset"></span>
+      </div>
+    </div>
+
+    <div class="cf-note" id="cf-https-warn"></div>
+  </div>
 
   <footer style="margin-top:24px;padding:16px 0 8px;border-top:1px solid #2d2d5e;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:11px;color:#555">
     <span>&#x2B21; ProxySpin</span>
@@ -1601,6 +1838,10 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json({'sources': SourceManager().load()})  # listes SOCKS personnalisées
         elif path == '/api/countries':
             self._json({'countries': self.manager.available_countries()})
+        elif path == '/api/cf/status':
+            self._json(self._cf_status())
+        elif path == '/api/cf/stats':
+            self._json(self._cf_stats())
         else:
             self._json({'error': 'not found'}, 404)
 
@@ -1628,8 +1869,72 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json(SourceManager().toggle(params.get('url', ''), params.get('enabled', True)))  # noqa
         elif path == '/api/country':
             self._json(self.manager.set_country(params.get('country', '')))
+        elif path == '/api/cf/config':
+            self._json(self._cf_save_config(params))
+        elif path == '/api/cf/deploy':
+            self._json(self._cf_deploy())
         else:
             self._json({'error': 'not found'}, 404)
+
+    # ── Helpers CF Worker ─────────────────────────────────────────────────────
+
+    def _cf_status(self) -> dict:
+        if not _CF_AVAILABLE:
+            return {'available': False, 'error': 'Module cfworker non disponible'}
+        cfg  = _cfworker.CFWorkerConfig().load()
+        name = cfg.get('worker_name', '')
+        return {
+            'available':     True,
+            'worker_name':   name,
+            'account_id':    cfg.get('account_id', ''),
+            'separator':     cfg.get('separator', '------'),
+            'last_sha256':   cfg.get('last_sha256', ''),
+            'last_deployed': cfg.get('last_deployed', ''),
+            'worker_url':    f'https://{name}.workers.dev' if name else '',
+            'configured':    bool(cfg.get('api_token') and cfg.get('account_id') and name),
+        }
+
+    def _cf_stats(self) -> dict:
+        if not _CF_AVAILABLE:
+            return {'available': False}
+        return _cfworker.CFRequestCounter().stats()
+
+    def _cf_save_config(self, params: dict) -> dict:
+        if not _CF_AVAILABLE:
+            return {'ok': False, 'error': 'Module cfworker non disponible'}
+        allowed = ('api_token', 'account_id', 'worker_name', 'separator')
+        data    = {k: v for k, v in params.items() if k in allowed and v}
+        if not data:
+            return {'ok': False, 'error': 'Aucun paramètre valide fourni'}
+        saved = _cfworker.CFWorkerConfig().save(data)
+        # Ne jamais renvoyer l'API Token dans la réponse
+        safe  = {k: v for k, v in saved.items() if k != 'api_token'}
+        return {'ok': True, **safe}
+
+    def _cf_deploy(self) -> dict:
+        if not _CF_AVAILABLE:
+            return {'ok': False, 'error': 'Module cfworker non disponible'}
+        cfg   = _cfworker.CFWorkerConfig().load()
+        token = cfg.get('api_token', '')
+        acct  = cfg.get('account_id', '')
+        name  = cfg.get('worker_name', '')
+        sep   = cfg.get('separator', '------')
+        if not all([token, acct, name]):
+            return {
+                'ok':    False,
+                'error': 'Configuration incomplète (API Token, Account ID, Worker Name requis)',
+            }
+        try:
+            result = _cfworker.CFWorkerDeployer().deploy(token, acct, name, sep)
+            if result.get('ok'):
+                _cfworker.CFWorkerConfig().save({
+                    'last_sha256':   result['sha256'],
+                    'last_deployed': result['deployed_at'],
+                })
+            return result
+        except Exception as e:
+            logger.warning(f'CF Worker deploy échoué — {e}')
+            return {'ok': False, 'error': str(e)}
 
     def _html(self, content):
         encoded = content.encode('utf-8')

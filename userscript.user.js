@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ProxySpin — Contrôleur
 // @namespace    proxyspin-controller
-// @version      3.1.0
-// @description  Affiche le mode (Tor/Proxy), le statut et les controles du proxy.
+// @version      3.2.0
+// @description  Affiche le mode (Tor/Proxy/Cloudflare), le statut, les controles et le quota CF.
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -43,6 +43,10 @@
       lbl_user:       'Identifiant',
       lbl_pass:       'Mot de passe',
       save:           'Enregistrer',
+      conn_cf:        'Cloudflare Worker',
+      cf_http_only:   'HTTP uniquement',
+      cf_quota:       'Quota',
+      cf_reset_in:    'Reset dans',
     },
     en: {
       checking:       'Checking\u2026',
@@ -69,6 +73,10 @@
       lbl_user:       'Username',
       lbl_pass:       'Password',
       save:           'Save',
+      conn_cf:        'Cloudflare Worker',
+      cf_http_only:   'HTTP only',
+      cf_quota:       'Quota',
+      cf_reset_in:    'Reset in',
     }
   };
 
@@ -92,6 +100,7 @@
     el('rp-lbl-user').textContent     = t('lbl_user');
     el('rp-lbl-pass').textContent     = t('lbl_pass');
     el('rp-btn-save').textContent     = t('save');
+    el('rp-lbl-cf-quota').textContent = t('cf_quota');
     el('rp-btn-lang-fr').style.opacity = LANG === 'fr' ? '1' : '0.4';
     el('rp-btn-lang-en').style.opacity = LANG === 'en' ? '1' : '0.4';
     // Reload first option of country select
@@ -151,10 +160,17 @@
       font-weight: bold; margin-bottom: 2px;
       transition: background .4s, color .4s;
     }
-    #rp-state-bar.state-loading  { background:#2a2a10; color:#ffd54f; border:1px solid #ffd54f44; }
-    #rp-state-bar.state-tor      { background:#14143a; color:#7c83fd; border:1px solid #7c83fd44; }
-    #rp-state-bar.state-proxy    { background:#0e2e18; color:#4caf50; border:1px solid #4caf5044; }
-    #rp-state-bar.state-offline  { background:#2e0e0e; color:#f44336; border:1px solid #f4433644; }
+    #rp-state-bar.state-loading    { background:#2a2a10; color:#ffd54f; border:1px solid #ffd54f44; }
+    #rp-state-bar.state-tor        { background:#14143a; color:#7c83fd; border:1px solid #7c83fd44; }
+    #rp-state-bar.state-proxy      { background:#0e2e18; color:#4caf50; border:1px solid #4caf5044; }
+    #rp-state-bar.state-cloudflare { background:#1a1200; color:#ff9800; border:1px solid #ff980044; }
+    #rp-state-bar.state-offline    { background:#2e0e0e; color:#f44336; border:1px solid #f4433644; }
+
+    #rp-cf-quota { display:none; margin-top:2px; }
+    #rp-cf-bar-bg { background:#2d2d5e; border-radius:3px; height:5px; margin:4px 0 2px; overflow:hidden; }
+    #rp-cf-bar { height:100%; border-radius:3px; background:#ff9800; width:0%; transition:width .4s, background .3s; }
+    #rp-cf-bar.cf-warn   { background:#f44336; }
+    #rp-cf-bar.cf-ok     { background:#4caf50; }
     #rp-state-icon { font-size: 16px; }
     #rp-state-text { flex: 1; line-height: 1.3; }
     #rp-state-sub  { font-weight:normal; font-size:10px; opacity:.7; display:block; }
@@ -232,6 +248,15 @@
 
       <button id="rp-btn-rotate" disabled></button>
       <div id="rp-cooldown"></div>
+
+      <div id="rp-cf-quota">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-top:4px">
+          <span id="rp-lbl-cf-quota"></span>
+          <span id="rp-cf-count">—</span>
+        </div>
+        <div id="rp-cf-bar-bg"><div id="rp-cf-bar" class="cf-ok"></div></div>
+        <div style="font-size:10px;color:#555;text-align:right" id="rp-cf-reset"></div>
+      </div>
 
       <div id="rp-settings">
         <label id="rp-lbl-url"></label>
@@ -330,6 +355,25 @@
 
   // ─── Statut du proxy ──────────────────────────────────────────────────────
   let lastMode = null;
+  let _cfStatsInterval = null;
+
+  async function refreshCFStats() {
+    try {
+      const r = await gmReq('GET', apiUrl('/api/cf/stats'));
+      if (r.status !== 200) return;
+      const stats = JSON.parse(r.responseText);
+      const pct   = stats.percent || 0;
+      const bar   = el('rp-cf-bar');
+      el('rp-cf-count').textContent = stats.used.toLocaleString() + '/' + (stats.limit / 1000) + 'k';
+      bar.style.width = pct + '%';
+      bar.className   = 'cf-' + (pct >= 80 ? 'warn' : 'ok');
+      if (stats.reset_in_s > 0) {
+        const h = Math.floor(stats.reset_in_s / 3600);
+        const m = Math.floor((stats.reset_in_s % 3600) / 60);
+        el('rp-cf-reset').textContent = `${t('cf_reset_in')} ${h}h${m}m`;
+      }
+    } catch { /* ignore */ }
+  }
 
   async function checkStatus() {
     try {
@@ -337,11 +381,11 @@
       if (r.status !== 200) throw new Error();
       const s = JSON.parse(r.responseText);
 
-      el('rp-instances').textContent = s.instances || '0';
+      el('rp-instances').textContent = s.mode === 'cloudflare' ? '1 Worker' : (s.instances || '0');
       el('rp-autorot').textContent   = s.auto_rotation
         ? `ON · ${s.rotation_interval}s`
         : 'OFF';
-      el('rp-btn-rotate').disabled = s.loading;
+      el('rp-btn-rotate').disabled = s.loading || s.mode === 'cloudflare';
 
       if (s.loading) {
         setStateBar(
@@ -362,13 +406,30 @@
         } else {
           setStateBar('loading', '<span class="rp-spin">⟳</span>', t('searching'), t('conn_local'));
         }
+      } else if (s.mode === 'cloudflare') {
+        setStateBar('cloudflare', '&#x2601;', t('conn_cf'), t('cf_http_only'));
       }
 
-      if (s.mode !== 'tor' && !s.loading) {
-        el('rp-country-row').style.display = 'flex';
-        loadCountries(s.country_filter);
-      } else {
+      // Quota CF : visible uniquement en mode cloudflare
+      if (s.mode === 'cloudflare' && !s.loading) {
+        el('rp-cf-quota').style.display = 'block';
         el('rp-country-row').style.display = 'none';
+        if (!_cfStatsInterval) {
+          refreshCFStats();
+          _cfStatsInterval = setInterval(refreshCFStats, 30000);
+        }
+      } else {
+        el('rp-cf-quota').style.display = 'none';
+        if (_cfStatsInterval) {
+          clearInterval(_cfStatsInterval);
+          _cfStatsInterval = null;
+        }
+        if (s.mode === 'local' && !s.loading) {
+          el('rp-country-row').style.display = 'flex';
+          loadCountries(s.country_filter);
+        } else {
+          el('rp-country-row').style.display = 'none';
+        }
       }
 
       lastMode = s.loading ? lastMode : s.mode;
