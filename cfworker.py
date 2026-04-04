@@ -287,7 +287,12 @@ class _WSClient:
 
     def connect(self, timeout: float = 15.0):
         ctx = ssl.create_default_context()
-        raw = socket.create_connection((self._host, self._port), timeout=timeout)
+        # Résoudre en forçant IPv4 (AF_INET) — Docker n'a généralement pas IPv6
+        infos = socket.getaddrinfo(self._host, self._port, socket.AF_INET, socket.SOCK_STREAM)
+        if not infos:
+            raise OSError(f'Impossible de résoudre {self._host} en IPv4')
+        _, _, _, _, addr = infos[0]
+        raw = socket.create_connection(addr, timeout=timeout)
         self._sock = ctx.wrap_socket(raw, server_hostname=self._host)
         self._sock.settimeout(timeout)
         self._handshake()
