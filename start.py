@@ -1019,6 +1019,8 @@ class ProxyManager:
             time.sleep(5)
             if not config['auto_rotation']:
                 continue
+            if self.mode == 'cloudflare':
+                continue
             if time.time() - self._last_rotation >= config['rotation_interval']:
                 logger.info(f"Rotation auto (mode={self.mode}, interval={config['rotation_interval']}s)")
                 self.rotate()
@@ -1276,7 +1278,12 @@ WEB_UI_HTML = """<!DOCTYPE html>
     <div class="field">
       <label id="lbl-cf-name"></label>
       <input type="text" id="inp-cf-name" placeholder="mon-proxy">
-      <span id="cf-worker-url" style="color:#555;font-size:11px;display:block;margin-top:4px"></span>
+    </div>
+    <div class="field">
+      <label id="lbl-cf-subdomain"></label>
+      <input type="text" id="inp-cf-subdomain" placeholder="moncompte">
+      <span style="color:#666;font-size:10px;display:block;margin-top:2px" id="cf-subdomain-hint"></span>
+      <span style="color:#4caf50;font-size:11px;display:block;margin-top:2px" id="cf-worker-url"></span>
     </div>
     <div class="field">
       <label id="lbl-cf-sep"></label>
@@ -1363,6 +1370,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
         cf_token:       'API Token Cloudflare',
         cf_account:     'Account ID',
         cf_name:        'Nom du Worker',
+        cf_subdomain:   'Sous-domaine workers.dev',
+        cf_subdomain_h: '(Dashboard CF \u2192 Workers & Pages \u2192 votre-sous-domaine.workers.dev)',
         cf_sep:         'S\u00e9parateur',
         cf_save:        'Sauvegarder',
         cf_deploy:      '&#x1F680; D\u00e9ployer / Mettre \u00e0 jour',
@@ -1424,6 +1433,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
         cf_token:       'Cloudflare API Token',
         cf_account:     'Account ID',
         cf_name:        'Worker Name',
+        cf_subdomain:   'workers.dev subdomain',
+        cf_subdomain_h: '(CF Dashboard \u2192 Workers & Pages \u2192 your-subdomain.workers.dev)',
         cf_sep:         'Separator',
         cf_save:        'Save',
         cf_deploy:      '&#x1F680; Deploy / Update',
@@ -1470,6 +1481,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
       document.getElementById('lbl-cf-token').textContent       = t('cf_token');
       document.getElementById('lbl-cf-account').textContent     = t('cf_account');
       document.getElementById('lbl-cf-name').textContent        = t('cf_name');
+      document.getElementById('lbl-cf-subdomain').textContent   = t('cf_subdomain');
+      document.getElementById('cf-subdomain-hint').textContent  = t('cf_subdomain_h');
       document.getElementById('lbl-cf-sep').textContent         = t('cf_sep');
       document.getElementById('btn-cf-save').textContent        = t('cf_save');
       document.getElementById('btn-cf-deploy').innerHTML        = t('cf_deploy');
@@ -1704,13 +1717,13 @@ WEB_UI_HTML = """<!DOCTYPE html>
       const r = await api('GET', '/api/cf/status').catch(() => null);
       if (!r) return;
       _cfStatusLoaded = true;
-      $('inp-cf-account').value = r.account_id  || '';
-      $('inp-cf-name').value    = r.worker_name || '';
-      $('inp-cf-sep').value     = r.separator   || '------';
+      $('inp-cf-account').value   = r.account_id        || '';
+      $('inp-cf-name').value      = r.worker_name       || '';
+      $('inp-cf-subdomain').value = r.workers_subdomain || '';
+      $('inp-cf-sep').value       = r.separator         || '------';
       // Ne pas pré-remplir le token (sécurité)
-      if (r.worker_url) {
-        $('cf-worker-url').textContent = '\u2192 ' + r.worker_url;
-      }
+      var wurl = r.worker_url || '';
+      $('cf-worker-url').textContent = wurl ? '\u2192 ' + wurl : '';
       $('cf-deployed-at').textContent = r.last_deployed || t('cf_not_dep');
       $('cf-sha').textContent = r.last_sha256 ? 'sha256:' + r.last_sha256 : '\u2014';
     }
@@ -1750,9 +1763,10 @@ WEB_UI_HTML = """<!DOCTYPE html>
     // Sauvegarde config
     $('btn-cf-save').addEventListener('click', async function() {
       var body = {
-        account_id:  $('inp-cf-account').value.trim(),
-        worker_name: $('inp-cf-name').value.trim(),
-        separator:   $('inp-cf-sep').value.trim() || '------',
+        account_id:        $('inp-cf-account').value.trim(),
+        worker_name:       $('inp-cf-name').value.trim(),
+        workers_subdomain: $('inp-cf-subdomain').value.trim(),
+        separator:         $('inp-cf-sep').value.trim() || '------',
       };
       var token = $('inp-cf-token').value.trim();
       if (token) body.api_token = token;
@@ -1882,15 +1896,18 @@ class APIHandler(BaseHTTPRequestHandler):
             return {'available': False, 'error': 'Module cfworker non disponible'}
         cfg  = _cfworker.CFWorkerConfig().load()
         name = cfg.get('worker_name', '')
+        sub  = cfg.get('workers_subdomain', '')
+        host = f'{name}.{sub}.workers.dev' if (name and sub) else (f'{name}.workers.dev' if name else '')
         return {
-            'available':     True,
-            'worker_name':   name,
-            'account_id':    cfg.get('account_id', ''),
-            'separator':     cfg.get('separator', '------'),
-            'last_sha256':   cfg.get('last_sha256', ''),
-            'last_deployed': cfg.get('last_deployed', ''),
-            'worker_url':    f'https://{name}.workers.dev' if name else '',
-            'configured':    bool(cfg.get('api_token') and cfg.get('account_id') and name),
+            'available':         True,
+            'worker_name':       name,
+            'account_id':        cfg.get('account_id', ''),
+            'workers_subdomain': sub,
+            'separator':         cfg.get('separator', '------'),
+            'last_sha256':       cfg.get('last_sha256', ''),
+            'last_deployed':     cfg.get('last_deployed', ''),
+            'worker_url':        f'https://{host}' if host else '',
+            'configured':        bool(cfg.get('api_token') and cfg.get('account_id') and name and sub),
         }
 
     def _cf_stats(self) -> dict:
@@ -1901,7 +1918,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def _cf_save_config(self, params: dict) -> dict:
         if not _CF_AVAILABLE:
             return {'ok': False, 'error': 'Module cfworker non disponible'}
-        allowed = ('api_token', 'account_id', 'worker_name', 'separator')
+        allowed = ('api_token', 'account_id', 'worker_name', 'workers_subdomain', 'separator')
         data    = {k: v for k, v in params.items() if k in allowed and v}
         if not data:
             return {'ok': False, 'error': 'Aucun paramètre valide fourni'}
