@@ -448,17 +448,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_CONNECT(self):
         if not self._auth_ok():
             return
-        # Mode Cloudflare Worker : HTTPS (CONNECT) non supporté par WorkerProxy.js
+        # Mode Cloudflare Worker : tunnel TCP via WebSocket → cloudflare:sockets
         if config.get('mode') == 'cloudflare':
-            msg = (b'CF Worker mode ne supporte pas HTTPS/CONNECT. '
-                   b'Configurez votre client en HTTP uniquement.')
-            self.send_response(502, 'CF Worker: HTTPS non supporte')
-            self.send_header('Content-Type',   'text/plain; charset=utf-8')
-            self.send_header('Content-Length', str(len(msg)))
-            self.send_header('Connection',     'close')
-            self.end_headers()
-            self.wfile.write(msg)
-            logger.debug(f'CF Worker: CONNECT refusé pour {self.path} (HTTPS non supporté)')
+            if not _CF_AVAILABLE:
+                self.send_error(503, 'Module cfworker non disponible')
+                return
+            _cfworker.handle_connect_request(self)
             return
         def _abort():
             """Coupe la connexion client brutalement pour éviter tout fallback direct."""
@@ -1374,7 +1369,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         cf_sha:         'Version JS',
         cf_quota:       'Quota journalier',
         cf_reset_in:    'Reset dans',
-        cf_warn:        '\u26a0 CF Worker supporte uniquement HTTP (pas HTTPS). Les sites en https:// ne seront pas accessibles via ce mode.',
+        cf_warn:        '\u2705 CF Worker supporte HTTP et HTTPS (tunnel TCP via WebSocket).',
       },
       en: {
         subtitle:       'Control panel',
@@ -1435,7 +1430,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         cf_sha:         'JS Version',
         cf_quota:       'Daily quota',
         cf_reset_in:    'Reset in',
-        cf_warn:        '\u26a0 CF Worker only supports HTTP (not HTTPS). Sites on https:// will not be accessible in this mode.',
+        cf_warn:        '\u2705 CF Worker supports HTTP and HTTPS (TCP tunnel via WebSocket).',
       }
     };
     function t(k) { return (TR[LANG] && TR[LANG][k]) || TR.fr[k] || k; }
