@@ -79,15 +79,24 @@ class CFWorkerConfig:
 
     @property
     def worker_url(self) -> str:
-        """URL de base pour proxifier : https://worker.workers.dev/------"""
-        name = self.get('worker_name', '')
-        sep  = self.get('separator', '------')
-        return f'https://{name}.workers.dev/{sep}' if name else ''
+        """URL de base pour proxifier : https://<name>.<subdomain>.workers.dev/------"""
+        cfg  = self.load()
+        name = cfg.get('worker_name', '')
+        sub  = cfg.get('workers_subdomain', '')
+        sep  = cfg.get('separator', '------')
+        if not name:
+            return ''
+        host = f'{name}.{sub}.workers.dev' if sub else f'{name}.workers.dev'
+        return f'https://{host}/{sep}'
 
     @property
     def worker_host(self) -> str:
-        name = self.get('worker_name', '')
-        return f'{name}.workers.dev' if name else ''
+        cfg  = self.load()
+        name = cfg.get('worker_name', '')
+        sub  = cfg.get('workers_subdomain', '')
+        if not name:
+            return ''
+        return f'{name}.{sub}.workers.dev' if sub else f'{name}.workers.dev'
 
 
 # ─── CFRequestCounter ─────────────────────────────────────────────────────────
@@ -179,6 +188,24 @@ class CFWorkerDeployer:
             js = js.replace("const SEP     = '------'", f"const SEP     = '{separator}'")
         return js
 
+    def _fetch_subdomain(self, api_token: str, account_id: str) -> str:
+        """Récupère le sous-domaine workers.dev du compte (ex: 'aerya' → aerya.workers.dev)."""
+        url = f'https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain'
+        req = Request(url)
+        req.add_header('Authorization', f'Bearer {api_token}')
+        try:
+            with urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            subdomain = data.get('result', {}).get('subdomain', '')
+            if subdomain:
+                logger.info(f'CF subdomain détecté : {subdomain}.workers.dev')
+            else:
+                logger.warning('CF subdomain introuvable dans la réponse API')
+            return subdomain
+        except Exception as e:
+            logger.warning(f'Impossible de récupérer le subdomain CF : {e}')
+            return ''
+
     def deploy(self, api_token: str, account_id: str, worker_name: str,
                separator: str = '------') -> dict:
         """
@@ -225,8 +252,18 @@ class CFWorkerDeployer:
             raise RuntimeError(f"Déploiement refusé — {'; '.join(msgs)}")
 
         deployed_at = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-        logger.info(f'CF Worker "{worker_name}" déployé (sha256:{sha256})')
-        return {'ok': True, 'sha256': sha256, 'deployed_at': deployed_at}
+
+        # ── Récupération du sous-domaine workers.dev ───────────────────────────
+        subdomain = self._fetch_subdomain(api_token, account_id)
+        CFWorkerConfig().save({
+            'last_sha256':       sha256,
+            'last_deployed_at':  deployed_at,
+            'workers_subdomain': subdomain,
+        })
+
+        worker_fqdn = f'{worker_name}.{subdomain}.workers.dev' if subdomain else f'{worker_name}.workers.dev'
+        logger.info(f'CF Worker "{worker_name}" déployé → {worker_fqdn} (sha256:{sha256})')
+        return {'ok': True, 'sha256': sha256, 'deployed_at': deployed_at, 'worker_url': f'https://{worker_fqdn}'}
 
 
 # ─── Client WebSocket minimal (RFC 6455, sans dépendance externe) ─────────────

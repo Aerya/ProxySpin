@@ -27,7 +27,11 @@ from urllib.request import ProxyHandler, Request, build_opener, urlopen
 try:
     import cfworker as _cfworker
     _CF_AVAILABLE = True
-except ImportError:
+except Exception as _cf_import_err:
+    import logging as _logging
+    _logging.getLogger('proxyspin').warning(
+        f'cfworker non disponible : {type(_cf_import_err).__name__}: {_cf_import_err}'
+    )
     _cfworker     = None
     _CF_AVAILABLE = False
 
