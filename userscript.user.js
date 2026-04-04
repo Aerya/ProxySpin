@@ -44,7 +44,7 @@
       lbl_pass:       'Mot de passe',
       save:           'Enregistrer',
       conn_cf:        'Cloudflare Worker',
-      cf_http_only:   'HTTP uniquement',
+      cf_http_only:   'HTTP + HTTPS',
       cf_quota:       'Quota',
       cf_reset_in:    'Reset dans',
     },
@@ -74,7 +74,7 @@
       lbl_pass:       'Password',
       save:           'Save',
       conn_cf:        'Cloudflare Worker',
-      cf_http_only:   'HTTP only',
+      cf_http_only:   'HTTP + HTTPS',
       cf_quota:       'Quota',
       cf_reset_in:    'Reset in',
     }
