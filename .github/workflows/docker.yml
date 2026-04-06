@@ -38,7 +38,7 @@ jobs:
 
       # Étape 1 : build local pour le smoke test
       - name: Build (local)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
@@ -60,7 +60,7 @@ jobs:
 
       # Étape 3 : push si smoke test OK
       - name: Push latest-amd64
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
@@ -98,7 +98,7 @@ jobs:
 
       # Étape 1 : build local pour le smoke test
       - name: Build (local)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64
@@ -120,7 +120,7 @@ jobs:
 
       # Étape 3 : push si smoke test OK
       - name: Push latest-arm64
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64
