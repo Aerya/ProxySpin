@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 LABEL maintainer="Aerya <blog@upandclear.org>"
 
 ENV DEBIAN_FRONTEND=noninteractive
