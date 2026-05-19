@@ -1,8 +1,18 @@
 # ⬡ ProxySpin
 
+Proxy HTTP rotatif anonymisant basé sur **Tor**, avec support optionnel de proxies SOCKS4/SOCKS5 privés — interface web et extension navigateur.
+
 > 🇬🇧 [English version](README.en.md) — 📝 [Article de présentation (fr)](https://upandclear.org/2026/04/03/proxyspin-proxy-rotatif-anonymisant-base-sur-tor-avec-support-optionnel-de-proxies-socks4-socks5-interface-web-et-extension-navigateur/)
 
-Proxy HTTP rotatif anonymisant basé sur **Tor**, avec support optionnel de proxies SOCKS4/SOCKS5 privés — interface web et extension navigateur.
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![Tor](https://img.shields.io/badge/Tor-based-7E4798?logo=torbrowser&logoColor=white)
+![Build](https://img.shields.io/github/actions/workflow/status/Aerya/ProxySpin/docker.yml?branch=main&label=build)
+![Multi-arch](https://img.shields.io/badge/multi--arch-amd64%20%7C%20arm64-success)
+![Web UI](https://img.shields.io/badge/Web%20UI-inclus-blue)
+![Extension](https://img.shields.io/badge/Extension-navigateur-blue)
+![i18n](https://img.shields.io/badge/i18n-FR%20%7C%20EN-orange)
+
+> **Tu l'utilises ? Tu l'aimes ? [⭐ Mets une étoile !](https://github.com/Aerya/ProxySpin/stargazers)** — ça prend deux secondes.
 
 ---
 
@@ -270,6 +280,13 @@ docker pull ghcr.io/aerya/proxyspin:latest-arm64
 - [Whonix](https://www.whonix.org) — système d'exploitation axé sur la confidentialité via Tor
 
 ---
+
+## Crédits
+
+- **[Gluetun](https://github.com/qdm12/gluetun)** — le serveur Python d'authentification sur le port 1973 est calqué sur son mécanisme de proxy HTTP authentifié.
+- **[The Tor Project](https://www.torproject.org)** — réseau Tor et démon `tor`, cœur du mode anonymisant.
+- **[Privoxy](https://www.privoxy.org)** — relais HTTP devant chaque instance Tor / proxy SOCKS.
+- **[HAProxy](https://www.haproxy.org)** — load balancer TCP entre les instances Privoxy.
 
 ## Licence
 

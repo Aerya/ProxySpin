@@ -1,8 +1,18 @@
 # ⬡ ProxySpin
 
+Anonymizing rotating HTTP proxy based on **Tor**, with optional support for private SOCKS4/SOCKS5 proxies — web control panel and browser extension.
+
 > 🇫🇷 [Version française](README.md)
 
-Anonymizing rotating HTTP proxy based on **Tor**, with optional support for private SOCKS4/SOCKS5 proxies — web control panel and browser extension.
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![Tor](https://img.shields.io/badge/Tor-based-7E4798?logo=torbrowser&logoColor=white)
+![Build](https://img.shields.io/github/actions/workflow/status/Aerya/ProxySpin/docker.yml?branch=main&label=build)
+![Multi-arch](https://img.shields.io/badge/multi--arch-amd64%20%7C%20arm64-success)
+![Web UI](https://img.shields.io/badge/Web%20UI-included-blue)
+![Extension](https://img.shields.io/badge/Browser-extension-blue)
+![i18n](https://img.shields.io/badge/i18n-FR%20%7C%20EN-orange)
+
+> **Using it? Liking it? [⭐ Drop a star!](https://github.com/Aerya/ProxySpin/stargazers)** — takes two seconds.
 
 ---
 
@@ -270,6 +280,13 @@ docker pull ghcr.io/aerya/proxyspin:latest-arm64
 - [Whonix](https://www.whonix.org) — privacy-focused OS routing all traffic through Tor
 
 ---
+
+## Credits
+
+- **[Gluetun](https://github.com/qdm12/gluetun)** — the Python authentication server on port 1973 is modelled after its authenticated HTTP proxy mechanism.
+- **[The Tor Project](https://www.torproject.org)** — Tor network and `tor` daemon, core of the anonymizing mode.
+- **[Privoxy](https://www.privoxy.org)** — HTTP relay in front of each Tor instance / SOCKS proxy.
+- **[HAProxy](https://www.haproxy.org)** — TCP load balancer across Privoxy instances.
 
 ## License
 
