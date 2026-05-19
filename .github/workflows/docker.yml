@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
   schedule:
     # Rebuild hebdomadaire — récupère automatiquement les dernières versions
     # de Tor, Privoxy et HAProxy depuis leurs dépôts apt
@@ -27,6 +29,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Login to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -58,8 +61,9 @@ jobs:
             proxyspin:smoke-amd64 \
             python3 /usr/local/bin/start.py --check
 
-      # Étape 3 : push si smoke test OK
+      # Étape 3 : push si smoke test OK (uniquement hors PR)
       - name: Push latest-amd64
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -82,6 +86,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Login to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -118,8 +123,9 @@ jobs:
             proxyspin:smoke-arm64 \
             python3 /usr/local/bin/start.py --check
 
-      # Étape 3 : push si smoke test OK
+      # Étape 3 : push si smoke test OK (uniquement hors PR)
       - name: Push latest-arm64
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -134,6 +140,7 @@ jobs:
   manifest:
     runs-on: ubuntu-latest
     needs: [build-amd64, build-arm64]
+    if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: write
