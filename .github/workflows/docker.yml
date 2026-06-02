@@ -158,10 +158,27 @@ jobs:
 
       - name: Create multi-arch manifest :latest
         run: |
-          docker buildx imagetools create \
-            --tag ${{ env.IMAGE }}:latest \
-            ${{ env.IMAGE }}:latest-amd64 \
-            ${{ env.IMAGE }}:latest-arm64
+          for attempt in 1 2 3 4 5; do
+            if docker buildx imagetools create \
+              --tag ${{ env.IMAGE }}:latest \
+              ${{ env.IMAGE }}:latest-amd64 \
+              ${{ env.IMAGE }}:latest-arm64; then
+              exit 0
+            fi
+            sleep_seconds=$((attempt * 15))
+            echo "GHCR manifest create failed (attempt ${attempt}/5), retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+          exit 1
 
       - name: Inspect manifest
-        run: docker buildx imagetools inspect ${{ env.IMAGE }}:latest
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker buildx imagetools inspect ${{ env.IMAGE }}:latest; then
+              exit 0
+            fi
+            sleep_seconds=$((attempt * 15))
+            echo "GHCR manifest inspect failed (attempt ${attempt}/5), retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+          exit 1
