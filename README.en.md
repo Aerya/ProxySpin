@@ -125,6 +125,8 @@ Interval in seconds between automatic Tor circuit renewals. Auto-rotation is **a
 **`tors`**
 In `tor` mode, ProxySpin starts N completely independent Tor processes. Each one builds its own 3-hop encrypted circuit and has its own exit IP. HAProxy distributes requests across these N instances. With `tors=10` you have 10 different exit IPs available simultaneously.
 
+Tor rotation does not spawn new daemons: it sends `SIGNAL NEWNYM` through each instance's ControlPort. When an instance has to stop or restart (mode switch, health check, internal restart), ProxySpin terminates the matching Tor process, waits for it to exit, escalates if needed, cleans the PID file, and reaps child processes to avoid `<defunct>` zombies.
+
 **`MAX_PROXIES`**
 In `local` mode, only the first `MAX_PROXIES` working proxies are activated in HAProxy. When a country filter is active, ProxySpin widens the search to `MAX_PROXIES × 5` candidates.
 

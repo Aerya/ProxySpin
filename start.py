@@ -92,18 +92,130 @@ def read_pid(pid_file):
     except (FileNotFoundError, ValueError, OSError):
         return None
 
-def kill_pid(pid_file):
+def reap_children(signum=None, frame=None):
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        except OSError:
+            return
+        if pid == 0:
+            return
+
+signal.signal(signal.SIGCHLD, reap_children)
+
+def pid_exists(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+def pid_cmdline(pid):
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            return f.read().replace(b'\0', b' ').decode(errors='replace').strip()
+    except OSError:
+        return ''
+
+def pid_state(pid):
+    try:
+        with open(f'/proc/{pid}/stat') as f:
+            return f.read().split()[2]
+    except OSError:
+        return None
+
+def pid_matches(pid, required_tokens):
+    if not required_tokens:
+        return True
+    cmdline = pid_cmdline(pid)
+    return cmdline and all(token in cmdline for token in required_tokens)
+
+def find_pids_by_cmdline(required_tokens):
+    found = []
+    try:
+        entries = os.listdir('/proc')
+    except OSError:
+        return found
+    current_pid = os.getpid()
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == current_pid:
+            continue
+        if pid_matches(pid, required_tokens):
+            found.append(pid)
+    return found
+
+def wait_pid_exit(pid, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            waited, _status = os.waitpid(pid, os.WNOHANG)
+            if waited == pid:
+                return True
+        except ChildProcessError:
+            if not pid_exists(pid):
+                return True
+        except OSError:
+            if not pid_exists(pid):
+                return True
+        if not pid_exists(pid):
+            return True
+        if pid_state(pid) == 'Z':
+            reap_children()
+            if not pid_exists(pid) or pid_state(pid) != 'Z':
+                return True
+        time.sleep(0.2)
+    return not pid_exists(pid)
+
+def terminate_pid(pid, name='process', graceful_signal=signal.SIGTERM, timeout=10, required_tokens=None):
+    if not pid or not pid_exists(pid):
+        return True
+    if required_tokens and not pid_matches(pid, required_tokens):
+        logger.warning(f'{name}: pid {pid} ne correspond pas au process attendu, arrêt ignoré')
+        return False
+    try:
+        os.kill(pid, graceful_signal)
+        logger.debug(f'{name}: signal {graceful_signal} envoyé au pid {pid}')
+    except ProcessLookupError:
+        return True
+    if wait_pid_exit(pid, timeout):
+        return True
+    try:
+        os.kill(pid, signal.SIGKILL)
+        logger.warning(f'{name}: pid {pid} forcé au SIGKILL')
+    except ProcessLookupError:
+        return True
+    return wait_pid_exit(pid, 3)
+
+def kill_pid(pid_file, name='process', graceful_signal=signal.SIGTERM, timeout=10, required_tokens=None):
     pid = read_pid(pid_file)
     if pid:
-        try:
-            os.kill(pid, signal.SIGINT)
-            logger.debug(f'killed pid {pid} ({pid_file})')
-        except ProcessLookupError:
-            pass
+        terminate_pid(pid, name, graceful_signal, timeout, required_tokens)
+    try:
+        stale = pid and required_tokens and pid_exists(pid) and not pid_matches(pid, required_tokens)
+        if os.path.exists(pid_file) and (not pid or not pid_exists(pid) or stale):
+            os.remove(pid_file)
+    except OSError:
+        pass
 
 def fire_and_forget(cmd):
     logger.debug(f'run: {cmd}')
     subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def spawn_background(args, name):
+    logger.debug('run: %s', ' '.join(str(a) for a in args))
+    return subprocess.Popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 # ─── Tor ──────────────────────────────────────────────────────────────────────
 
@@ -113,30 +225,56 @@ class Tor:
         self.control_port = control_port
         self._pid_file    = f'/var/run/tor/{port}.pid'
         self._data_dir    = f'/var/lib/tor/{port}'
+        self._process     = None
+
+    @property
+    def _cmd_tokens(self):
+        return [
+            'tor',
+            f'--SocksPort {self.port}',
+            f'--ControlPort {self.control_port}',
+            f'--DataDirectory {self._data_dir}',
+        ]
 
     def start(self):
         ensure_dirs('/var/lib/tor', '/var/run/tor', '/var/log/tor', self._data_dir)
+        self.stop()
         logger.info(f'starting tor on socks={self.port} control={self.control_port}')
-        fire_and_forget(
-            f'tor'
-            f' --SocksPort {self.port}'
-            f' --ControlPort {self.control_port}'
-            f' --NewCircuitPeriod 15'
-            f' --MaxCircuitDirtiness 15'
-            f' --UseEntryGuards 0'
-            f' --CircuitBuildTimeout 5'
-            f' --ExitRelay 0'
-            f' --ClientOnly 1'
-            f' --DataDirectory {self._data_dir}'
-            f' --PidFile {self._pid_file}'
-            f' --Log "warn syslog"'
-            f' --RunAsDaemon 1'
-            f" | logger -t 'tor' 2>&1"
-        )
+        self._process = spawn_background([
+            'tor',
+            '--SocksPort', str(self.port),
+            '--ControlPort', str(self.control_port),
+            '--NewCircuitPeriod', '15',
+            '--MaxCircuitDirtiness', '15',
+            '--UseEntryGuards', '0',
+            '--CircuitBuildTimeout', '5',
+            '--ExitRelay', '0',
+            '--ClientOnly', '1',
+            '--DataDirectory', self._data_dir,
+            '--PidFile', self._pid_file,
+            '--Log', 'warn stdout',
+        ], 'tor')
 
     def stop(self):
         logger.info(f'stopping tor port {self.port}')
-        kill_pid(self._pid_file)
+        stopped = False
+        if self._process and self._process.poll() is None:
+            stopped = terminate_pid(
+                self._process.pid,
+                f'tor port {self.port}',
+                signal.SIGINT,
+                required_tokens=['tor'],
+            )
+        kill_pid(
+            self._pid_file,
+            f'tor port {self.port}',
+            signal.SIGINT,
+            required_tokens=['tor'],
+        )
+        for pid in find_pids_by_cmdline(self._cmd_tokens):
+            terminate_pid(pid, f'tor port {self.port}', signal.SIGINT, required_tokens=['tor'])
+        if stopped and self._process:
+            self._process = None
 
     def rotate(self):
         try:
@@ -158,21 +296,40 @@ class Privoxy:
         self._protocol      = protocol
         self._pid_file      = f'/var/run/privoxy/{port}.pid'
         self._config_path   = f'/var/lib/privoxy/{port}.conf'
+        self._process       = None
 
     def start(self):
         ensure_dirs('/var/lib/privoxy', '/var/run/privoxy', '/var/log/privoxy')
         self._write_config()
-        if os.path.exists(self._pid_file):
-            os.remove(self._pid_file)
+        self.stop()
         logger.info(f'starting privoxy port {self.port} → {self._upstream_host}:{self._upstream_port} ({self._protocol})')
-        fire_and_forget(
-            f'privoxy --no-daemon --pidfile {self._pid_file} {self._config_path}'
-            f" | logger -t 'privoxy' 2>&1"
-        )
+        self._process = spawn_background([
+            'privoxy',
+            '--no-daemon',
+            '--pidfile', self._pid_file,
+            self._config_path,
+        ], 'privoxy')
 
     def stop(self):
         logger.info(f'stopping privoxy port {self.port}')
-        kill_pid(self._pid_file)
+        stopped = False
+        if self._process and self._process.poll() is None:
+            stopped = terminate_pid(
+                self._process.pid,
+                f'privoxy port {self.port}',
+                signal.SIGTERM,
+                required_tokens=['privoxy'],
+            )
+        kill_pid(
+            self._pid_file,
+            f'privoxy port {self.port}',
+            signal.SIGTERM,
+            required_tokens=['privoxy'],
+        )
+        for pid in find_pids_by_cmdline(['privoxy', self._config_path]):
+            terminate_pid(pid, f'privoxy port {self.port}', signal.SIGTERM, required_tokens=['privoxy'])
+        if stopped and self._process:
+            self._process = None
 
     def _forward_directive(self):
         h, p = self._upstream_host, self._upstream_port

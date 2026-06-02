@@ -125,6 +125,8 @@ Intervalle en secondes entre deux renouvellements automatiques de circuits Tor. 
 **`tors`**
 En mode `tor`, ProxySpin démarre N processus Tor complètement indépendants. Chacun construit son propre circuit chiffré à 3 nœuds et possède sa propre IP de sortie. HAProxy répartit les requêtes entre ces N instances. Avec `tors=10`, vous avez 10 IPs de sortie différentes disponibles simultanément.
 
+La rotation Tor ne lance pas de nouveaux démons : elle envoie `SIGNAL NEWNYM` sur le ControlPort de chaque instance. Lorsqu'une instance doit être arrêtée ou redémarrée (changement de mode, health check, redémarrage interne), ProxySpin termine le processus Tor correspondant, attend sa sortie, force l'arrêt si nécessaire, nettoie le PID file et récolte les processus enfants pour éviter les zombies `<defunct>`.
+
 **`MAX_PROXIES`**
 En mode `local`, seuls les `MAX_PROXIES` premiers proxies opérationnels sont activés dans HAProxy. Si un filtre pays est actif, ProxySpin élargit la recherche à `MAX_PROXIES × 5` candidats.
 
