@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check scripts
+        run: |
+          bash -n scripts/test-proxyspin.sh
+          python3 -m py_compile \
+            scripts/container-healthcheck.py \
+            start.py \
+            cfworker.py
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+  functional-test:
+    name: Functional Tor proxy test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --pull -t proxyspin:test .
+
+      - name: Verify Pebble was removed
+        run: |
+          docker run --rm --entrypoint sh proxyspin:test \
+            -c 'test ! -e /usr/bin/pebble'
+
+      - name: Run end-to-end tests
+        run: ./scripts/test-proxyspin.sh proxyspin:test
+
+      - name: Upload container logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxyspin-ci-logs
+          path: proxyspin-ci.log
+          if-no-files-found: ignore
