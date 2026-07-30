@@ -2,11 +2,9 @@ name: Trivy security scan
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
   push:
-    branches:
-      - main
+    branches: [main]
   schedule:
     - cron: "0 7 * * 1"
   workflow_dispatch:
@@ -35,16 +33,19 @@ jobs:
             -c 'test ! -e /usr/bin/pebble'
 
       - name: Generate SARIF report
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: proxyspin:trivy
-          format: sarif
-          output: trivy.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/work" \
+            aquasec/trivy:0.65.0 image \
+            --format sarif \
+            --output /work/trivy.sarif \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            proxyspin:trivy
 
       - name: Upload results to Security
-        if: always()
+        if: always() && hashFiles('trivy.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
@@ -53,23 +54,28 @@ jobs:
 
       - name: Block PR on fixable HIGH or CRITICAL vulnerabilities
         if: github.event_name == 'pull_request'
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: proxyspin:trivy
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.65.0 image \
+            --format table \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            proxyspin:trivy
 
       - name: Generate scheduled JSON report
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: proxyspin:trivy
-          format: json
-          output: trivy.json
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/work" \
+            aquasec/trivy:0.65.0 image \
+            --format json \
+            --output /work/trivy.json \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            proxyspin:trivy
 
       - name: Open, update or close security issue
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -83,7 +89,6 @@ jobs:
             for (const result of report.Results || []) {
               for (const vulnerability of result.Vulnerabilities || []) {
                 if (!vulnerability.FixedVersion) continue;
-
                 rows.push({
                   severity: vulnerability.Severity,
                   id: vulnerability.VulnerabilityID,
@@ -96,17 +101,13 @@ jobs:
             }
 
             const title = "Trivy : vulnérabilités corrigibles à examiner";
-
             const issues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: "open",
               labels: "security,automated",
             });
-
-            const existing = issues.data.find(
-              issue => issue.title === title
-            );
+            const existing = issues.data.find(issue => issue.title === title);
 
             if (rows.length === 0) {
               if (existing) {
@@ -117,8 +118,6 @@ jobs:
                   state: "closed",
                 });
               }
-
-              core.info("Aucune vulnérabilité HIGH/CRITICAL corrigible.");
               return;
             }
 
@@ -127,7 +126,7 @@ jobs:
             ).join("\n");
 
             const body = [
-              "Le rebuild sans cache, avec mise à niveau Ubuntu, laisse encore les vulnérabilités corrigibles suivantes :",
+              "Le rebuild sans cache laisse encore les vulnérabilités corrigibles suivantes :",
               "",
               "| Gravité | CVE | Paquet | Installé | Correctif | Cible |",
               "|---|---|---|---|---|---|",
