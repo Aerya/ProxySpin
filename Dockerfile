@@ -1,4 +1,10 @@
 FROM ubuntu:26.04
+
+# eMudhra: refresh the OS trust store for this security update.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 LABEL maintainer="Aerya <blog@upandclear.org>"
 
 ENV DEBIAN_FRONTEND=noninteractive

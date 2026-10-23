@@ -26,6 +26,12 @@ Anonymizing rotating HTTP proxy based on **Tor**, with optional support for priv
 
 ---
 
+### TLS security — October 2026
+
+Update image trust stores and TLS components following the eMudhra incident. Checks cover the compromised chains, including both No CT cases, and a valid HTTPS connection. Running images remain unchanged: schedule their replacement after validation.
+
+[Incident details](https://emudhra.we-have-a-problem.com/) · [TLS checks](security/emudhra/README.md)
+
 ## Description
 
 ProxySpin exposes a **single entry point** (port 1973) behind which each request can exit with a different IP address. It supports two modes:
